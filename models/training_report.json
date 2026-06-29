@@ -1,0 +1,140 @@
+{
+  "winner": "ensemble",
+  "f1_macro": 0.8703,
+  "f1_macro_equal_weights": 0.8703,
+  "xgb_solo_f1": 0.8703,
+  "lgb_solo_f1": 0.8686,
+  "ensemble_weights": {
+    "xgb": 0.6425,
+    "lgb": 0.3575
+  },
+  "calibration_temp": 0.7146,
+  "xgb_best_params": {
+    "subsample": 0.7,
+    "reg_lambda": 1.0,
+    "reg_alpha": 0.5,
+    "n_estimators": 200,
+    "min_child_weight": 3,
+    "max_depth": 4,
+    "learning_rate": 0.05,
+    "gamma": 0.1,
+    "colsample_bytree": 0.8
+  },
+  "lgb_best_params": {
+    "subsample": 0.9,
+    "reg_lambda": 2.0,
+    "reg_alpha": 2.0,
+    "num_leaves": 15,
+    "n_estimators": 200,
+    "min_child_samples": 50,
+    "learning_rate": 0.08,
+    "colsample_bytree": 0.9
+  },
+  "n_train": 1679,
+  "n_test": 635,
+  "xgb_cv_mean": 0.8966,
+  "xgb_cv_std": 0.0109,
+  "lgb_cv_mean": 0.8932,
+  "lgb_cv_std": 0.0117,
+  "ens_cv_mean": 0.894,
+  "ens_cv_std": 0.0114,
+  "xgb_cv_folds": [
+    0.9095,
+    0.8829,
+    0.8973
+  ],
+  "lgb_cv_folds": [
+    0.9097,
+    0.8846,
+    0.8851
+  ],
+  "ens_cv_folds": [
+    0.9097,
+    0.8829,
+    0.8894
+  ],
+  "split_method": "real_enriched_primary",
+  "feature_cols": [
+    "vt_malicious_ratio",
+    "vt_suspicious_count",
+    "vt_reputation",
+    "abuse_confidence",
+    "abuse_total_reports",
+    "abuse_distinct_users",
+    "abuse_is_tor",
+    "abuse_categories_count",
+    "shodan_open_ports_count",
+    "shodan_cve_count",
+    "shodan_has_port_22",
+    "shodan_has_port_445",
+    "shodan_has_port_3389",
+    "tag_count",
+    "has_known_family",
+    "is_ip",
+    "is_domain",
+    "is_hash",
+    "is_tor",
+    "otx_pulse_count",
+    "otx_avg_confidence",
+    "otx_has_scan",
+    "vt_abuse_agreement",
+    "threat_signal_sum",
+    "port_attack_surface",
+    "cve_per_port",
+    "reports_per_user",
+    "malicious_family",
+    "tor_reputation_risk",
+    "otx_vt_corroboration",
+    "shodan_exposure_score",
+    "has_vt_data",
+    "has_abuse_data",
+    "has_shodan_data",
+    "vt_harmless_ratio"
+  ],
+  "n_features": 35,
+  "classes": [
+    "CLEAN",
+    "CRITICAL",
+    "HIGH",
+    "LOW"
+  ],
+  "report": {
+    "CLEAN": {
+      "precision": 0.7945205479452054,
+      "recall": 0.6904761904761905,
+      "f1-score": 0.7388535031847133,
+      "support": 84.0
+    },
+    "CRITICAL": {
+      "precision": 0.9689922480620154,
+      "recall": 0.7861635220125787,
+      "f1-score": 0.8680555555555556,
+      "support": 159.0
+    },
+    "HIGH": {
+      "precision": 0.8517350157728707,
+      "recall": 0.9926470588235294,
+      "f1-score": 0.9168081494057725,
+      "support": 272.0
+    },
+    "LOW": {
+      "precision": 0.9741379310344828,
+      "recall": 0.9416666666666667,
+      "f1-score": 0.9576271186440678,
+      "support": 120.0
+    },
+    "accuracy": 0.8913385826771654,
+    "macro avg": {
+      "precision": 0.8973464357036436,
+      "recall": 0.8527383594947413,
+      "f1-score": 0.8703360816975273,
+      "support": 635.0
+    },
+    "weighted avg": {
+      "precision": 0.8966582196592384,
+      "recall": 0.8913385826771654,
+      "f1-score": 0.8887741708291457,
+      "support": 635.0
+    }
+  }
+}

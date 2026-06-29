@@ -1,0 +1,24 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.uv-cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+node_modules/
+frontend/dist/
+frontend/.next/
+*.log
+.DS_Store
+
+# Large data files
+data/raw/
+data/processed/
+data/enrich_checkpoint.csv
+data/ioc_dataset.csv
+data/tia.db
+data/workspaces/*.json

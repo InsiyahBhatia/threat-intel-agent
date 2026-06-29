@@ -1,0 +1,40 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { @apply box-border; }
+  body {
+    @apply m-0 bg-ink text-text font-sans text-[13px] antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  button { @apply border-0 cursor-pointer bg-transparent; }
+  a { @apply text-primary no-underline; }
+  a:hover { @apply underline; }
+  input, textarea, select { @apply outline-none; }
+}
+
+@layer components {
+  .glass {
+    @apply bg-surface-light/60 backdrop-blur-xl border border-border/50;
+  }
+  .card-hover {
+    @apply transition-all duration-200;
+  }
+  .card-hover:hover {
+    @apply -translate-y-0.5 shadow-lg shadow-black/20;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #374151 transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar { width: 4px; height: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #374151; border-radius: 2px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+}

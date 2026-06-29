@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "Threat Intel Agent",
+  "version": "1.0.0",
+  "description": "Real-time IOC detection, investigation, and threat intelligence in your browser sidebar.",
+  "permissions": [
+    "contextMenus",
+    "activeTab",
+    "storage",
+    "notifications",
+    "scripting",
+    "alarms",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "http://localhost:*/*",
+    "https://localhost:*/*"
+  ],
+  "side_panel": {
+    "default_path": "sidebar.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "styles.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Threat Intel Agent",
+    "default_icon": {
+      "16": "icons/brand-icon.png",
+      "32": "icons/brand-icon.png",
+      "48": "icons/brand-icon.png",
+      "128": "icons/brand-icon.png"
+    }
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/brand-icon.png",
+    "32": "icons/brand-icon.png",
+    "48": "icons/brand-icon.png",
+    "128": "icons/brand-icon.png"
+  }
+}

@@ -1,0 +1,54 @@
+(function () {
+  var apiUrl = document.getElementById('apiUrl');
+  var autoScan = document.getElementById('autoScan');
+  var saveBtn = document.getElementById('saveBtn');
+  var testBtn = document.getElementById('testBtn');
+  var stat = document.getElementById('stat');
+
+  chrome.storage.sync.get({ apiBase: 'http://localhost:8000', autoScan: true }, function (items) {
+    apiUrl.value = items.apiBase; autoScan.checked = items.autoScan;
+  });
+
+  saveBtn.addEventListener('click', save);
+  testBtn.addEventListener('click', testConn);
+  apiUrl.addEventListener('keydown', function (e) { if (e.key === 'Enter') save(); });
+
+  function save() {
+    var url = apiUrl.value.trim();
+    if (!url) { showStat('URL required', 'err'); return; }
+    if (!url.startsWith('http://') && !url.startsWith('https://')) { showStat('Must start with http:// or https://', 'err'); return; }
+    var clean = url.replace(/\/+$/, '');
+    chrome.storage.sync.set({ apiBase: clean, autoScan: autoScan.checked }, function () {
+      if (chrome.runtime.lastError) { showStat('Save failed', 'err'); return; }
+      showStat('Saved', 'suc');
+      try {
+        chrome.runtime.sendMessage({ type: 'settings-updated', apiBase: clean }, function (resp) {
+          var err = chrome.runtime.lastError;
+        });
+      } catch (e) {}
+    });
+  }
+
+  function testConn() {
+    var url = apiUrl.value.trim().replace(/\/+$/, '');
+    if (!url) { showStat('Enter a URL', 'err'); return; }
+    showStat('Testing...', 'info');
+    var c = new AbortController();
+    var t = setTimeout(function () { c.abort(); }, 5000);
+    fetch(url + '/health', { signal: c.signal }).then(function (r) {
+      clearTimeout(t);
+      if (!r.ok) throw new Error('Status ' + r.status);
+      return r.json();
+    }).then(function (h) {
+      showStat(h.status === 'healthy' ? 'Connected' : 'Degraded (' + h.status + ')', h.status === 'healthy' ? 'suc' : 'info');
+    }).catch(function (err) {
+      clearTimeout(t);
+      showStat(err.name === 'AbortError' ? 'Timed out' : 'Failed: ' + err.message, 'err');
+    });
+  }
+
+  function showStat(msg, type) {
+    stat.textContent = msg; stat.className = 'stat ' + (type || '');
+    clearTimeout(stat._t); stat._t = setTimeout(function () { stat.textContent = ''; stat.className = 'stat'; }, 4000);
+  }
+})();

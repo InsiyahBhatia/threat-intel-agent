@@ -1,0 +1,37 @@
+{
+  "bias": -0.172476,
+  "features": [
+    "vt_malicious_ratio",
+    "vt_suspicious_ratio",
+    "abuse_confidence",
+    "abuse_reports",
+    "cve_count",
+    "tor_signal",
+    "proxy_signal",
+    "bruteforce_signal",
+    "phishing_signal",
+    "malware_signal",
+    "clean_signal",
+    "api_error_ratio"
+  ],
+  "thresholds": {
+    "CRITICAL": 0.86,
+    "HIGH": 0.66,
+    "LOW": 0.18
+  },
+  "version": 1,
+  "weights": {
+    "abuse_confidence": 1.959194,
+    "abuse_reports": 2.029165,
+    "api_error_ratio": 0.0,
+    "bruteforce_signal": 2.514725,
+    "clean_signal": -6.124552,
+    "cve_count": 0.59508,
+    "malware_signal": 3.43735,
+    "phishing_signal": 1.20885,
+    "proxy_signal": 0.531125,
+    "tor_signal": 0.531125,
+    "vt_malicious_ratio": 2.637366,
+    "vt_suspicious_ratio": 1.359604
+  }
+}
