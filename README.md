@@ -8,47 +8,6 @@
 
 An AI-powered threat intelligence platform that takes an IOC (IP, domain, or file hash), enriches it across four OSINT APIs in parallel, scores it with a custom-trained ML ensemble, maps behaviors to MITRE ATT&CK, and returns a structured verdict with severity, confidence, risk score, and recommended actions. Built for SOC analysts and blue-team practitioners who need fast, explainable threat scoring without a commercial TI subscription.
 
-## Architecture
-
-```mermaid
-flowchart TB
-    subgraph Frontend["Browser"]
-        Ext["Chrome Extension MV3<br/>sidebar · popup · content script"]
-        Dash["React Dashboard<br/>Vite + Tailwind + Framer Motion"]
-    end
-
-    subgraph Backend["FastAPI Backend"]
-        API["REST + SSE Endpoints"]
-        Orch["Orchestrator · LangChain ReAct Agent"]
-        ML["ML Ensemble<br/>XGBoost + LightGBM · T=0.715"]
-        Mapper["MITRE ATT&CK Mapper<br/>20+ technique signals"]
-        SHAP["SHAP Explainability · Why This Severity"]
-        Store["SQLite + JSON Workspaces"]
-    end
-
-    subgraph Enrichment["Parallel Enrichment (ThreadPoolExecutor)"]
-        VT["VirusTotal API · 500 req/day"]
-        Shodan["Shodan API · host lookups"]
-        Abuse["AbuseIPDB API · 1000 checks/day"]
-        OTX["AlienVault OTX API · unlimited"]
-    end
-
-    Ext -->|POST /investigate| API
-    Dash -->|POST /investigate| API
-    API -->|SSE stream| Ext
-    API -->|SSE stream| Dash
-    API --> Orch
-    Orch --> VT & Shodan & Abuse & OTX
-    VT & Shodan & Abuse & OTX -->|31 features| ML
-    ML -->|verdict · confidence| Orch
-    Orch --> Mapper
-    Mapper -->|TTPs| Orch
-    ML --> SHAP
-    SHAP -->|feature contributions| API
-    Orch --> API
-    API --> Store
-```
-
 ## Features
 
 - **Parallel enrichment** — Four APIs (VirusTotal, Shodan, AbuseIPDB, AlienVault OTX) queried simultaneously via `ThreadPoolExecutor`. Investigation latency drops from ~12s sequential to ~3-4s parallel.
