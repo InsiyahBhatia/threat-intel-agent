@@ -1,7 +1,10 @@
-import React from "react";
-import { ShieldAlert, ExternalLink, RotateCcw, Flag, CheckCircle } from "lucide-react";
+import React, { useState } from "react";
+import { ShieldAlert, ExternalLink, RotateCcw, Flag, CheckCircle, ThumbsDown } from "lucide-react";
 import { useTheme } from "./ThemeContext";
 import { motion } from "framer-motion";
+import { cn } from "../lib/utils";
+
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 function WhyThisSeverity({ report, mlFeatures }) {
   const reasons = [];
@@ -79,6 +82,25 @@ export default function ReportPreview({ report, onReRun, onIgnore, ignoredIocs }
   const barColor = severityBarColors[sev] || severityBarColors.UNKNOWN;
   const conf = Math.min(100, Math.max(0, r.confidence_score ?? r.ml_confidence ?? 0));
   const riskPct = r.risk_score != null ? Math.round(r.risk_score * 100) : null;
+  const [showCorrection, setShowCorrection] = useState(false);
+  const [feedbackSent, setFeedbackSent] = useState(false);
+
+  async function handleFeedback(userLabel) {
+    try {
+      await fetch(`${API_URL}/api/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ioc: report.ioc,
+          predicted_severity: sev,
+          user_label: userLabel,
+          source: "ui",
+        }),
+      });
+      setFeedbackSent(true);
+      setShowCorrection(false);
+    } catch {}
+  }
 
   if (!report) return null;
 
@@ -177,7 +199,7 @@ export default function ReportPreview({ report, onReRun, onIgnore, ignoredIocs }
       </div>
 
       {/* Footer */}
-      <div className="flex items-center gap-2 px-4 py-3 border-t border-border bg-surface/50">
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-t border-border bg-surface/50">
         {onReRun && (
           <button
             onClick={() => onReRun(report.ioc)}
@@ -186,6 +208,37 @@ export default function ReportPreview({ report, onReRun, onIgnore, ignoredIocs }
             <RotateCcw size={12} />
             Re-run
           </button>
+        )}
+        {!feedbackSent ? (
+          <>
+            <button
+              onClick={() => setShowCorrection(!showCorrection)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border border-border text-muted hover:text-text transition-colors"
+            >
+              <ThumbsDown size={12} />
+              Wrong?
+            </button>
+            {showCorrection && (
+              <div className="flex gap-1.5">
+                {["CRITICAL", "HIGH", "LOW", "CLEAN"].map(sev => (
+                  <button
+                    key={sev}
+                    onClick={() => handleFeedback(sev)}
+                    className={cn(
+                      "px-2 py-1 rounded text-[10px] font-bold uppercase",
+                      severityStyles[sev].bg, severityStyles[sev].text
+                    )}
+                  >
+                    {sev}
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-xs font-medium text-green-500">
+            <CheckCircle size={12} /> Feedback submitted
+          </span>
         )}
         {onIgnore && !isIgnored && (
           <button
