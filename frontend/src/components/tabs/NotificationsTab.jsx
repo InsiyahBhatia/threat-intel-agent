@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { cn } from "../../lib/utils";
 
-const API_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export default function NotificationsTab({ palette }) {
   const [cfg, setCfg] = useState({
@@ -10,9 +10,9 @@ export default function NotificationsTab({ palette }) {
     slack: { enabled: false, webhook_url: "" },
     teams: { enabled: false, webhook_url: "" },
   });
-  const [saving, setSaving] = useState(false);
   const [emailTo, setEmailTo] = useState("");
   const [testResult, setTestResult] = useState(null);
+  const saveTimer = useRef(null);
 
   useEffect(() => {
     fetch(`${API_URL}/api/integrations/notifications`)
@@ -24,19 +24,22 @@ export default function NotificationsTab({ palette }) {
       .catch(() => {});
   }, []);
 
-  function update(section, key, value) {
-    setCfg(c => ({ ...c, [section]: { ...c[section], [key]: value } }));
+  function autoSave(nextCfg) {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      const payload = { ...nextCfg, email: { ...nextCfg.email, to_addrs: emailTo.split(",").map(s => s.trim()).filter(Boolean) } };
+      fetch(`${API_URL}/api/integrations/notifications`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      }).catch(() => {});
+    }, 500);
   }
 
-  async function handleSave() {
-    const payload = { ...cfg, email: { ...cfg.email, to_addrs: emailTo.split(",").map(s => s.trim()).filter(Boolean) } };
-    setSaving(true);
-    try {
-      await fetch(`${API_URL}/api/integrations/notifications`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-      });
-    } catch {}
-    setSaving(false);
+  function update(section, key, value) {
+    setCfg(c => {
+      const next = { ...c, [section]: { ...c[section], [key]: value } };
+      autoSave(next);
+      return next;
+    });
   }
 
   async function handleTest(channel) {
@@ -114,9 +117,6 @@ export default function NotificationsTab({ palette }) {
       </div>
 
       <div className="flex items-center gap-3">
-        <button onClick={handleSave} disabled={saving} className="px-4 py-2 rounded-lg text-sm font-medium bg-primary hover:bg-primary-hover text-white disabled:opacity-40">
-          {saving ? "Saving..." : "Save All"}
-        </button>
         {testResult && (
           <span className={cn("text-xs", testResult.ok ? "text-green-500" : "text-red-500")}>
             {testResult.channel}: {testResult.ok ? "Test sent successfully" : (testResult.detail || "Failed")}

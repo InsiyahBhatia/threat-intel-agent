@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { cn } from "../../lib/utils";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-function ConfigCard({ title, fields, config, onChange, onSave, onPush, pushLabel, saving }) {
+function ConfigCard({ title, fields, config, onChange, onPush, pushLabel }) {
   return (
     <div className="bg-surface border border-border rounded-lg p-4">
       <h4 className="text-sm font-semibold text-text mb-3">{title}</h4>
@@ -26,8 +26,7 @@ function ConfigCard({ title, fields, config, onChange, onSave, onPush, pushLabel
         ))}
       </div>
       <div className="flex gap-2">
-        <button onClick={onSave} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs font-medium bg-primary hover:bg-primary-hover text-white disabled:opacity-40">{saving ? "Saving..." : "Save"}</button>
-        {onPush && <button onClick={onPush} className="px-3 py-1.5 rounded-lg text-xs font-medium bg-surface border border-border hover:bg-border text-text">{pushLabel || "Push"}</button>}
+        {onPush && <button onClick={onPush} className="px-3 py-1.5 rounded-lg text-xs font-medium bg-primary hover:bg-primary-hover text-white">{pushLabel || "Push"}</button>}
       </div>
     </div>
   );
@@ -40,6 +39,10 @@ export default function IntegrationsTab({ palette }) {
   const [misp, setMisp] = useState({ enabled: false, url: "", api_key: "", verify_ssl: true });
   const [opencti, setOpencti] = useState({ enabled: false, url: "", api_key: "" });
   const [thehive, setThehive] = useState({ enabled: false, url: "", api_key: "", organisation: "" });
+  const siemTimer = useRef(null);
+  const mispTimer = useRef(null);
+  const openctiTimer = useRef(null);
+  const thehiveTimer = useRef(null);
 
   useEffect(() => {
     Promise.all([
@@ -50,12 +53,35 @@ export default function IntegrationsTab({ palette }) {
     ]);
   }, []);
 
-  function save(endpoint, data, key) {
-    setSaving(s => ({ ...s, [key]: true }));
+  function save(endpoint, data) {
     fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
-      .then(r => { if (!r.ok) throw new Error("Save failed"); return r.json(); })
-      .then(() => { setSaving(s => ({ ...s, [key]: false })); })
-      .catch(() => { setSaving(s => ({ ...s, [key]: false })); });
+      .catch(() => {});
+  }
+
+  function debouncedSave(timer, endpoint, data) {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => save(endpoint, data), 500);
+  }
+
+  function updateSiem(key, value) {
+    const next = { ...siem, [key]: value };
+    setSiem(next);
+    debouncedSave(siemTimer, "/api/integrations/siem", next);
+  }
+  function updateMisp(key, value) {
+    const next = { ...misp, [key]: value };
+    setMisp(next);
+    debouncedSave(mispTimer, "/api/integrations/misp", next);
+  }
+  function updateOpencti(key, value) {
+    const next = { ...opencti, [key]: value };
+    setOpencti(next);
+    debouncedSave(openctiTimer, "/api/integrations/opencti", next);
+  }
+  function updateThehive(key, value) {
+    const next = { ...thehive, [key]: value };
+    setThehive(next);
+    debouncedSave(thehiveTimer, "/api/integrations/thehive", next);
   }
 
   function push(endpoint) {
@@ -91,39 +117,29 @@ export default function IntegrationsTab({ palette }) {
             { key: "target", label: "Target Host" },
             { key: "port", label: "Port", type: "number" },
             { key: "protocol", label: "Protocol" },
-          ]} config={siem} onChange={(k, v) => setSiem(s => ({ ...s, [k]: v }))}
-            onSave={() => save("/api/integrations/siem", siem, "siem")}
+          ]} config={siem} onChange={updateSiem}
             onPush={() => push("/api/integrations/siem/forward")}
-            pushLabel="Forward CRITICAL/HIGH" saving={saving.siem} />
+            pushLabel="Forward CRITICAL/HIGH" />
 
           <ConfigCard title="MISP" fields={[
             { key: "enabled", label: "Enable", type: "toggle" },
             { key: "url", label: "URL" },
             { key: "api_key", label: "API Key", secret: true },
             { key: "verify_ssl", label: "Verify SSL", type: "toggle" },
-          ]} config={misp} onChange={(k, v) => setMisp(s => ({ ...s, [k]: v }))}
-            onSave={() => save("/api/integrations/misp", misp, "misp")}
-            onPush={() => push("/api/integrations/misp/push")}
-            pushLabel="Push IOCs" saving={saving.misp} />
+          ]} config={misp} onChange={updateMisp}
 
           <ConfigCard title="OpenCTI" fields={[
             { key: "enabled", label: "Enable", type: "toggle" },
             { key: "url", label: "URL" },
             { key: "api_key", label: "API Key", secret: true },
-          ]} config={opencti} onChange={(k, v) => setOpencti(s => ({ ...s, [k]: v }))}
-            onSave={() => save("/api/integrations/opencti", opencti, "opencti")}
-            onPush={() => push("/api/integrations/opencti/push")}
-            pushLabel="Push IOCs" saving={saving.opencti} />
+          ]} config={opencti} onChange={updateOpencti}
 
           <ConfigCard title="TheHive" fields={[
             { key: "enabled", label: "Enable", type: "toggle" },
             { key: "url", label: "URL" },
             { key: "api_key", label: "API Key", secret: true },
             { key: "organisation", label: "Organisation" },
-          ]} config={thehive} onChange={(k, v) => setThehive(s => ({ ...s, [k]: v }))}
-            onSave={() => save("/api/integrations/thehive", thehive, "thehive")}
-            onPush={() => push("/api/integrations/thehive/create-case")}
-            pushLabel="Create Case" saving={saving.thehive} />
+          ]} config={thehive} onChange={updateThehive}
         </div>
         {pushResult && (
           <div className={cn("text-xs mt-3 rounded-lg px-3 py-2", pushResult.ok ? "bg-green-500/10 text-green-500" : "bg-red-500/10 text-red-500")}>
