@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Activity, History, Crosshair, ShieldAlert, Ban, Webhook, Rss, Bell,
   Upload, FolderKanban, Database, Settings, AlertTriangle, FileText,
-  ChevronDown, ChevronLeft, Cpu, MessageSquare, Send,
+  ChevronDown, ChevronLeft, Cpu, MessageSquare, Send, Radio,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import brandIcon from "../assest/brand-icon.png";
@@ -26,6 +26,7 @@ const navGroups = [
       { id: "webhooks", label: "Webhooks", icon: Webhook },
       { id: "feeds", label: "Feeds", icon: Rss },
       { id: "alerts", label: "Alerts", icon: Bell },
+      { id: "syslog", label: "Syslog", icon: Radio },
     ],
   },
   {

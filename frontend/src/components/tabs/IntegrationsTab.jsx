@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { cn } from "../../lib/utils";
 
-const API_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 function ConfigCard({ title, fields, config, onChange, onSave, onPush, pushLabel, saving }) {
   return (
@@ -35,6 +35,7 @@ function ConfigCard({ title, fields, config, onChange, onSave, onPush, pushLabel
 
 export default function IntegrationsTab({ palette }) {
   const [saving, setSaving] = useState({});
+  const [pushResult, setPushResult] = useState(null);
   const [siem, setSiem] = useState({ enabled: false, format: "cef", target: "", port: 514, protocol: "udp" });
   const [misp, setMisp] = useState({ enabled: false, url: "", api_key: "", verify_ssl: true });
   const [opencti, setOpencti] = useState({ enabled: false, url: "", api_key: "" });
@@ -52,14 +53,25 @@ export default function IntegrationsTab({ palette }) {
   function save(endpoint, data, key) {
     setSaving(s => ({ ...s, [key]: true }));
     fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+      .then(r => { if (!r.ok) throw new Error("Save failed"); return r.json(); })
       .then(() => { setSaving(s => ({ ...s, [key]: false })); })
-      .catch(() => setSaving(s => ({ ...s, [key]: false })));
+      .catch(() => { setSaving(s => ({ ...s, [key]: false })); });
   }
 
   function push(endpoint) {
-    fetch(endpoint, { method: "POST" }).then(r => r.json()).then(data => {
-      alert(data.status || data.detail || "Push completed");
-    }).catch(e => alert(e.message));
+    setPushResult(null);
+    fetch(endpoint, { method: "POST" })
+      .then(async r => {
+        const text = await r.text();
+        if (!text) throw new Error("Empty response from server");
+        return JSON.parse(text);
+      })
+      .then(data => {
+        setPushResult({ ok: true, msg: data.status || data.detail || data.message || "Push completed" });
+      })
+      .catch(e => {
+        setPushResult({ ok: false, msg: e.message });
+      });
   }
 
   return (
@@ -113,6 +125,11 @@ export default function IntegrationsTab({ palette }) {
             onPush={() => push("/api/integrations/thehive/create-case")}
             pushLabel="Create Case" saving={saving.thehive} />
         </div>
+        {pushResult && (
+          <div className={cn("text-xs mt-3 rounded-lg px-3 py-2", pushResult.ok ? "bg-green-500/10 text-green-500" : "bg-red-500/10 text-red-500")}>
+            {pushResult.msg}
+          </div>
+        )}
       </div>
     </motion.div>
   );

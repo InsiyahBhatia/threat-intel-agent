@@ -27,6 +27,7 @@ import YaraTab from "./components/tabs/YaraTab";
 import IntegrationsTab from "./components/tabs/IntegrationsTab";
 import NotificationsTab from "./components/tabs/NotificationsTab";
 import FeedbackTab from "./components/tabs/FeedbackTab";
+import SyslogTab from "./components/tabs/SyslogTab";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const STORAGE_KEY = "tia-dashboard-history";
@@ -729,6 +730,10 @@ function AppInner() {
 
         {activeTab === "feedback" && (
           <FeedbackTab palette={palette} />
+        )}
+
+        {activeTab === "syslog" && (
+          <SyslogTab palette={palette} />
         )}
 
         {activeTab === "blocklist" && (
