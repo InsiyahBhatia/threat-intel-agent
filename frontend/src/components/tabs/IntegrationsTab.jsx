@@ -127,12 +127,16 @@ export default function IntegrationsTab({ palette }) {
             { key: "api_key", label: "API Key", secret: true },
             { key: "verify_ssl", label: "Verify SSL", type: "toggle" },
           ]} config={misp} onChange={updateMisp}
+          onPush={() => push("/api/integrations/misp/push")}
+          pushLabel="Push IOCs" />
 
           <ConfigCard title="OpenCTI" fields={[
             { key: "enabled", label: "Enable", type: "toggle" },
             { key: "url", label: "URL" },
             { key: "api_key", label: "API Key", secret: true },
           ]} config={opencti} onChange={updateOpencti}
+          onPush={() => push("/api/integrations/opencti/push")}
+          pushLabel="Push IOCs" />
 
           <ConfigCard title="TheHive" fields={[
             { key: "enabled", label: "Enable", type: "toggle" },
@@ -140,6 +144,8 @@ export default function IntegrationsTab({ palette }) {
             { key: "api_key", label: "API Key", secret: true },
             { key: "organisation", label: "Organisation" },
           ]} config={thehive} onChange={updateThehive}
+          onPush={() => push("/api/integrations/thehive/create-case")}
+          pushLabel="Create Case" />
         </div>
         {pushResult && (
           <div className={cn("text-xs mt-3 rounded-lg px-3 py-2", pushResult.ok ? "bg-green-500/10 text-green-500" : "bg-red-500/10 text-red-500")}>
