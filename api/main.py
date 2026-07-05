@@ -1326,17 +1326,17 @@ async def forward_to_siem():
     for entry in critical_high:
         r = entry.get("report", {})
         if cfg["format"] == "cef":
-            msg = (
-                f"CEF:0|ThreatIntel|Agent|1.2|ioc-detected|IOC Detected|5|"
-                f"src={entry['ioc'] if entry.get('ioc_type') == 'ip' else ''}"
-                f"cs1={entry.get('ioc','')} cs1Label=ioc "
-                f"cs2={r.get('severity','UNKNOWN')} cs2Label=severity "
-                f"cs3={r.get('threat_category','')} cs3Label=category "
-                f"cs4={r.get('ml_verdict','')} cs4Label=ml_verdict "
-                f"cn1={r.get('ml_confidence',0)} cn1Label=ml_confidence "
-                f"cn2={int(r.get('risk_score',0)*100)} cn2Label=risk_score "
-                f"flexString1={entry.get('ioc_type','')} flexString1Label=ioc_type"
-            )
+            kv_pairs = [
+                f"src={entry['ioc']}" if entry.get('ioc_type') == 'ip' else None,
+                f"cs1={entry.get('ioc','')} cs1Label=ioc",
+                f"cs2={r.get('severity','UNKNOWN')} cs2Label=severity",
+                f"cs3={r.get('threat_category','')} cs3Label=category",
+                f"cs4={r.get('ml_verdict','')} cs4Label=ml_verdict",
+                f"cn1={r.get('ml_confidence',0)} cn1Label=ml_confidence",
+                f"cn2={int(r.get('risk_score',0)*100)} cn2Label=risk_score",
+                f"flexString1={entry.get('ioc_type','')} flexString1Label=ioc_type",
+            ]
+            msg = "CEF:0|ThreatIntel|Agent|1.2|ioc-detected|IOC Detected|5|" + " ".join(k for k in kv_pairs if k)
         else:
             msg = json.dumps(entry)
         try:
@@ -1414,15 +1414,22 @@ async def push_to_misp():
     async with httpx.AsyncClient(verify=cfg["verify_ssl"], timeout=15) as client:
         for entry in critical_high:
             r = entry.get("report", {})
+            ioc_type = entry.get('ioc_type', '')
+            if ioc_type == 'ip': attr_type = 'ip-src'
+            elif ioc_type == 'domain': attr_type = 'domain'
+            elif ioc_type in ('md5', 'sha1', 'sha256', 'sha512'): attr_type = ioc_type
+            elif 'url' in ioc_type: attr_type = 'url'
+            else: attr_type = 'text'
+            cat = "Network activity" if ioc_type in ('ip', 'domain') else "Payload delivery"
             event = {
                 "Event": {
                     "info": f"TIA IOC: {entry['ioc']} — {r.get('severity','UNKNOWN')}",
                     "threat_level_id": 4 if r.get('severity') == 'CRITICAL' else 3,
                     "analysis": 2,
                     "Attribute": [{
-                        "type": entry.get('ioc_type') == 'ip' and 'ip-src' or entry.get('ioc_type') == 'domain' and 'domain' or 'md5',
+                        "type": attr_type,
                         "value": entry['ioc'],
-                        "category": "Network activity" if entry.get('ioc_type') in ('ip', 'domain') else "Payload delivery",
+                        "category": cat,
                         "to_ids": True,
                     }]
                 }
@@ -1491,6 +1498,20 @@ async def push_to_opencti():
     async with httpx.AsyncClient(verify=cfg.get("verify_ssl", True), timeout=15) as client:
         for entry in critical_high:
             r = entry.get("report", {})
+            ioc_type = entry.get('ioc_type', '')
+            stix_types = {'ip': 'ipv4-addr', 'domain': 'domain-name', 'url': 'url',
+                          'md5': 'file:hashes.MD5', 'sha1': 'file:hashes.SHA-1', 'sha256': 'file:hashes.SHA-256'}
+            stix_type = stix_types.get(ioc_type, 'unknown')
+            obs_types = {'ip': 'IPv4-Addr', 'domain': 'Domain-Name', 'url': 'Url',
+                         'md5': 'File', 'sha1': 'File', 'sha256': 'File'}
+            obs_type = obs_types.get(ioc_type, 'Unknown')
+
+            # STIX pattern format depends on type
+            if ioc_type in ('md5', 'sha1', 'sha256', 'sha512'):
+                pattern = f"[{stix_type} = '{entry['ioc']}']"
+            else:
+                pattern = f"[{stix_type}:value = '{entry['ioc']}']"
+
             query = """
             mutation CreateIndicator($input: IndicatorAddInput!) {
                 indicatorAdd(input: $input) { id name }
@@ -1499,11 +1520,11 @@ async def push_to_opencti():
             variables = {
                 "input": {
                     "name": entry['ioc'],
-                    "pattern": f"[{entry.get('ioc_type','unknown')}:value = '{entry['ioc']}']",
+                    "pattern": pattern,
                     "pattern_type": "stix",
                     "score": 80 if r.get('severity') == 'CRITICAL' else 60,
                     "description": r.get('summary', ''),
-                    "x_opencti_main_observable_type": entry.get('ioc_type', 'Unknown'),
+                    "x_opencti_main_observable_type": obs_type,
                 }
             }
             try:
