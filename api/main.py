@@ -54,7 +54,8 @@ async def auth_middleware(request: Request, call_next):
         if not auth.startswith("Bearer ") or auth.removeprefix("Bearer ") != TIA_API_KEY:
             if request.url.path not in ("/health", "/", "/docs", "/openapi.json"):
                 from fastapi.responses import JSONResponse
-                return JSONResponse(status_code=401, content={"detail": "Missing or invalid API key. Set Authorization: Bearer <key> header."})
+                return JSONResponse(status_code=401, content={"detail": "Missing or invalid API key. Set Authorization: Bearer <key> header."},
+                                    headers={"Access-Control-Allow-Origin": "*"})
     return await call_next(request)
 
 _RATE_LIMIT_CACHE: dict[str, list[float]] = {}
@@ -71,7 +72,8 @@ async def rate_limit_middleware(request: Request, call_next):
     timestamps[:] = [t for t in timestamps if now - t < _RATE_LIMIT_WINDOW]
     if len(timestamps) >= _RATE_LIMIT_REQUESTS:
         from fastapi.responses import JSONResponse
-        return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Try again later."})
+        return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Try again later."},
+                            headers={"Access-Control-Allow-Origin": "*"})
     timestamps.append(now)
     return await call_next(request)
 
@@ -1612,6 +1614,7 @@ def generate_yara(req: YARARequest):
     rules = []
     hashes = []
     domains = []
+    others = []
     for ioc in req.iocs:
         ioc = ioc.strip()
         if not ioc: continue
@@ -1619,16 +1622,23 @@ def generate_yara(req: YARARequest):
         elif re.match(r'^[a-fA-F0-9]{64}$', ioc): hashes.append(ioc)
         elif re.match(r'^[a-fA-F0-9]{40}$', ioc): hashes.append(ioc)
         elif re.match(r'^[\w\-]+(\.[\w\-]+)+$', ioc): domains.append(ioc)
+        else: others.append(ioc)
 
-    conditions = []
-    if hashes:
-        conditions.append(" or ".join(f"$hash_{i} = \"{h}\"" for i, h in enumerate(hashes)))
-    if domains:
-        conditions.append(" or ".join(f"$domain_{i} contains \"{d}\"" for i, d in enumerate(domains)))
+    string_defs = []
+    cond_parts = []
 
-    if not conditions:
-        # Generate from IOCs as strings
-        conditions = [f"$ioc_{i} contains \"{ioc}\"" for i, ioc in enumerate(req.iocs[:20])]
+    for i, h in enumerate(hashes):
+        string_defs.append(f"\t$hash_{i} = \"{h}\"")
+        cond_parts.append(f"$hash_{i}")
+    for i, d in enumerate(domains):
+        string_defs.append(f"\t$domain_{i} = \"{d}\"")
+        cond_parts.append(f"$domain_{i}")
+    for i, o in enumerate(others[:20]):
+        string_defs.append(f"\t$ioc_{i} = \"{o}\"")
+        cond_parts.append(f"$ioc_{i}")
+
+    if not cond_parts:
+        return {"status": "ok", "rules": [], "rule_count": 0}
 
     meta_lines = [
         f"\tdescription = \"{req.description}\"",
@@ -1641,9 +1651,12 @@ def generate_yara(req: YARARequest):
 
     rule = (
         f"rule {req.rule_name[:64].replace(' ', '_').replace('-', '_')} {{\n"
+        + "\tmeta:\n"
         + "\n".join(meta_lines) + "\n"
+        + "\tstrings:\n"
+        + "\n".join(string_defs) + "\n"
         + "\tcondition:\n"
-        + "\t\t" + " or ".join(f"({c})" for c in conditions) + "\n"
+        + "\t\t" + " or ".join(cond_parts) + "\n"
         + "}"
     )
     rules.append(rule)
