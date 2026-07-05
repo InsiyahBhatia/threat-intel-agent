@@ -129,10 +129,10 @@ export default function DashboardTab({
       {/* Severity Distribution + Activity Feed */}
       <div className="grid grid-cols-1 lg:grid-cols-2 auto-rows-1fr gap-4">
         {/* Severity Distribution */}
-        <motion.div variants={itemVariants}>
+        <motion.div variants={itemVariants} className="max-h-[340px] overflow-hidden">
           <DashboardCard title="Severity Distribution">
             {severityBars.some(s => (catMap[s.key] || 0) > 0) ? (
-              <div className="flex flex-col gap-2.5 mt-1 w-full">
+              <div className="flex flex-col gap-2.5 mt-1 w-full overflow-y-auto scrollbar-thin">
                 {severityBars.map((s) => {
                   const count = catMap[s.key] || 0;
                   const pct = maxCount > 0 ? (count / maxCount) * 100 : 0;
@@ -161,10 +161,10 @@ export default function DashboardTab({
         </motion.div>
 
         {/* Activity Feed */}
-        <motion.div variants={itemVariants}>
+        <motion.div variants={itemVariants} className="max-h-[340px] overflow-hidden">
           <DashboardCard title="Activity Feed">
             {topFeed.length > 0 ? (
-              <div className="mt-2 divide-y divide-border">
+              <div className="mt-2 divide-y divide-border overflow-y-auto scrollbar-thin max-h-[260px]">
                   {topFeed.map((item, i) => (
                   <div key={i} className="flex items-center gap-3 py-2.5 text-sm">
                     <span className={cn(

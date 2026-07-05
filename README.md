@@ -156,5 +156,10 @@ Vericts appear as hover tooltips on scanned IOCs across any webpage. The sidebar
 
 | | |
 |---|---|
-| ![Explain](screenshots/09-explain-shap-features.png) | |
-| **ML Explainability (SHAP)** | |
+| ![Explain](screenshots/09-explain-shap-features.png) | ![CSV Export](screenshots/10-investigations-csv-excel.png) |
+| **ML Explainability (SHAP)** | **Investigations CSV in Excel** |
+
+| | |
+|---|---|
+| ![PDF Report](screenshots/11-pdf-report-export.png) | |
+| **Generated PDF report** | |

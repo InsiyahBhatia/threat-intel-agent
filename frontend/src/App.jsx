@@ -23,6 +23,10 @@ import { Network } from "vis-network";
 import { DataSet } from "vis-data";
 import "vis-network/styles/vis-network.min.css";
 import brandIcon from "./assest/brand-icon.png";
+import YaraTab from "./components/tabs/YaraTab";
+import IntegrationsTab from "./components/tabs/IntegrationsTab";
+import NotificationsTab from "./components/tabs/NotificationsTab";
+import FeedbackTab from "./components/tabs/FeedbackTab";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const STORAGE_KEY = "tia-dashboard-history";
@@ -430,12 +434,12 @@ function AppInner() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ioc: selReport.ioc }),
       });
-      const html = await r.text();
-      const blob = new Blob([html], { type: "text/html" });
+      if (!r.ok) { showToast((await r.json()).detail || "Report export failed", "error"); return; }
+      const blob = await r.blob();
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = `tia-report-${selReport.ioc}-${Date.now()}.html`;
+      const a = document.createElement("a"); a.href = url; a.download = `tia-report-${selReport.ioc}.pdf`;
       a.click(); URL.revokeObjectURL(url);
-      showToast("Report exported", "success");
+      showToast("PDF report downloaded", "success");
     } catch { showToast("Report export failed", "error"); }
   }
 
@@ -709,6 +713,22 @@ function AppInner() {
             onExplain={doExplain}
             palette={palette}
           />
+        )}
+
+        {activeTab === "yara" && (
+          <YaraTab palette={palette} />
+        )}
+
+        {activeTab === "integrations" && (
+          <IntegrationsTab palette={palette} />
+        )}
+
+        {activeTab === "notifications" && (
+          <NotificationsTab palette={palette} />
+        )}
+
+        {activeTab === "feedback" && (
+          <FeedbackTab palette={palette} />
         )}
 
         {activeTab === "blocklist" && (

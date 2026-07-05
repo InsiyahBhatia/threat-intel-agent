@@ -2,8 +2,8 @@ import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Activity, History, Crosshair, ShieldAlert, Ban, Webhook, Rss, Bell,
-  Upload, FolderKanban, Database, Settings, AlertTriangle,
-  ChevronDown, ChevronLeft,
+  Upload, FolderKanban, Database, Settings, AlertTriangle, FileText,
+  ChevronDown, ChevronLeft, Cpu, MessageSquare, Send,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import brandIcon from "../assest/brand-icon.png";
@@ -22,6 +22,7 @@ const navGroups = [
     label: "Intel",
     items: [
       { id: "blocklist", label: "Blocklist", icon: Ban },
+      { id: "yara", label: "YARA", icon: FileText },
       { id: "webhooks", label: "Webhooks", icon: Webhook },
       { id: "feeds", label: "Feeds", icon: Rss },
       { id: "alerts", label: "Alerts", icon: Bell },
@@ -31,8 +32,11 @@ const navGroups = [
     label: "Manage",
     items: [
       { id: "bulk", label: "Bulk Import", icon: Upload },
+      { id: "integrations", label: "Integrations", icon: Cpu },
+      { id: "notifications", label: "Notifications", icon: Send },
       { id: "workspace", label: "Workspaces", icon: FolderKanban },
       { id: "dbsearch", label: "DB Search", icon: Database },
+      { id: "feedback", label: "Feedback", icon: MessageSquare },
       { id: "health", label: "Settings", icon: Settings },
     ],
   },

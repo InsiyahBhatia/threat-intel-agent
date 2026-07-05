@@ -1,6 +1,9 @@
 # Tool interface
 langchain-core==0.3.59
 
+# PDF
+fpdf2>=2.8.0
+
 # API
 fastapi==0.115.12
 uvicorn[standard]==0.34.2

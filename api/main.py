@@ -6,7 +6,10 @@ Exposes POST /investigate for IOC analysis and /api/chat for the browser extensi
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from fastapi.responses import Response
 from typing import Optional
+from io import BytesIO
+from fpdf import FPDF
 import sys, os, re, json, asyncio, hashlib, logging, threading
 from pathlib import Path
 from dotenv import load_dotenv
@@ -1196,7 +1199,7 @@ class PDFExportRequest(BaseModel):
 
 @app.post("/api/export/pdf")
 def export_pdf(req: PDFExportRequest):
-    """Generate an HTML-based PDF report for an investigation."""
+    """Generate a PDF report for an investigation."""
     results = search_investigations(workspace=req.workspace, search=req.ioc, limit=1)
     if not results:
         raise HTTPException(404, "Investigation not found")
@@ -1205,44 +1208,72 @@ def export_pdf(req: PDFExportRequest):
         report = json.loads(inv.get("report_json", "{}"))
     except Exception:
         report = {}
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Investigation Report - {inv['ioc']}</title>
-<style>
-  body {{ font-family: 'Segoe UI', sans-serif; margin: 32px; color: #13202e; }}
-  h1 {{ font-size: 22px; border-bottom: 2px solid #1a6cf0; padding-bottom: 8px; }}
-  .field {{ margin: 8px 0; }}
-  .label {{ font-weight: 700; font-size: 11px; color: #5f738c; text-transform: uppercase; }}
-  .value {{ font-size: 14px; }}
-  .table {{ width: 100%; border-collapse: collapse; margin: 12px 0; }}
-  .table th, .table td {{ padding: 6px 10px; border: 1px solid #dce3ed; text-align: left; font-size: 12px; }}
-  .table th {{ background: #f3f6fa; font-weight: 700; }}
-  .severity-UNKNOWN {{ color: #5f738c; }}
-  .severity-CLEAN {{ color: #1ba861; }}
-  .severity-LOW {{ color: #0ea58e; }}
-  .severity-MEDIUM {{ color: #d48a1a; }}
-  .severity-HIGH {{ color: #c2490a; }}
-  .severity-CRITICAL {{ color: #dc3545; }}
-</style></head><body>
-<h1>Threat Intelligence Report</h1>
-<div class="field"><div class="label">IOC</div><div class="value">{inv['ioc']}</div></div>
-<div class="field"><div class="label">Type</div><div class="value">{inv.get('ioc_type', '')}</div></div>
-<div class="field"><div class="label">Severity</div><div class="value severity-{inv.get('severity', 'UNKNOWN')}"><strong>{inv.get('severity', 'UNKNOWN')}</strong></div></div>
-<div class="field"><div class="label">Threat Category</div><div class="value">{inv.get('threat_category', '')}</div></div>
-<div class="field"><div class="label">Risk Score</div><div class="value">{inv.get('risk_score', 0)}</div></div>
-<div class="field"><div class="label">Confidence</div><div class="value">{inv.get('confidence_score', 0)}</div></div>
-<div class="field"><div class="label">Summary</div><div class="value">{inv.get('summary', '')}</div></div>
-<div class="field"><div class="label">Investigaton Timestamp</div><div class="value">{inv.get('created_at', '')}</div></div>
-<h2>MITRE ATT&CK Techniques</h2>
-<table class="table"><tr><th>ID</th><th>Name</th><th>Tactic</th></tr>
-"""
-    for t in report.get("mitre_techniques", []):
-        html += f"<tr><td>{t.get('technique_id', '')}</td><td>{t.get('name', '')}</td><td>{t.get('tactic', '')}</td></tr>"
-    html += "</table><h2>Recommended Actions</h2><ul>"
-    for a in report.get("recommended_actions", []):
-        html += f"<li>{a}</li>"
-    html += "</ul></body></html>"
-    from fastapi.responses import HTMLResponse
-    return HTMLResponse(html)
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 12, "Threat Intelligence Report", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+
+    fields = [
+        ("IOC", inv["ioc"]),
+        ("Type", inv.get("ioc_type", "")),
+        ("Severity", inv.get("severity", "UNKNOWN")),
+        ("Threat Category", inv.get("threat_category", "")),
+        ("Risk Score", str(inv.get("risk_score", 0))),
+        ("Confidence", f'{inv.get("confidence_score", 0):.2f}'),
+        ("Investigation Timestamp", inv.get("created_at", "")),
+    ]
+    for label, value in fields:
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(0, 7, label, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 10)
+        pdf.multi_cell(0, 7, value or "")
+        pdf.ln(1)
+
+    summary = inv.get("summary", "")
+    if summary:
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(0, 7, "Summary", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 10)
+        pdf.multi_cell(0, 7, summary)
+        pdf.ln(2)
+
+    techniques = report.get("mitre_techniques", [])
+    if techniques:
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 10, "MITRE ATT&CK Techniques", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "B", 9)
+        col_w = [20, 100, 60]
+        pdf.cell(col_w[0], 7, "ID", border=1)
+        pdf.cell(col_w[1], 7, "Name", border=1)
+        pdf.cell(col_w[2], 7, "Tactic", border=1)
+        pdf.ln()
+        pdf.set_font("Helvetica", "", 9)
+        for t in techniques:
+            tid = t.get("technique_id", "") or ""
+            name = t.get("name", "") or ""
+            tactic = t.get("tactic", "") or ""
+            pdf.cell(col_w[0], 6, tid, border=1)
+            pdf.cell(col_w[1], 6, name, border=1)
+            pdf.cell(col_w[2], 6, tactic, border=1)
+            pdf.ln()
+        pdf.ln(2)
+
+    actions = report.get("recommended_actions", [])
+    if actions:
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 10, "Recommended Actions", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 10)
+        for i, a in enumerate(actions, 1):
+            pdf.multi_cell(0, 7, f"{i}. {a}")
+            pdf.ln(1)
+
+    buf = BytesIO()
+    pdf.output(buf)
+    buf.seek(0)
+    return Response(content=buf.getvalue(), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="tia-report-{inv["ioc"]}.pdf"'})
 
 # ───────────────────────────────────────────────────────────────────────────
 # TIER 4 — Integration & Automation
@@ -1723,6 +1754,24 @@ async def stream_investigation(ioc: str, background_tasks: BackgroundTasks):
             result = await asyncio.to_thread(investigate, ioc)
             severity = result.get("severity", "UNKNOWN")
             report = result.get("report", {})
+
+            # Save to SQLite so Report/PDF export can find it
+            try:
+                save_investigation({
+                    "ioc": result["ioc"],
+                    "ioc_type": result.get("ioc_type", ""),
+                    "severity": severity,
+                    "summary": report.get("summary", ""),
+                    "threat_category": report.get("threat_category", ""),
+                    "risk_score": report.get("risk_score", 0),
+                    "confidence_score": report.get("confidence_score", 0),
+                    "ml_verdict": report.get("ml_verdict"),
+                    "ml_confidence": report.get("ml_confidence"),
+                    "report": report,
+                    "workspace": "default",
+                })
+            except Exception as save_err:
+                logger.error(f"Failed to save investigation for {ioc}: {save_err}")
 
             if severity in ("CRITICAL", "HIGH"):
                 background_tasks.add_task(_notify_and_log, ioc, severity, report)
