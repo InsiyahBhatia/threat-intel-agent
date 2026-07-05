@@ -5,6 +5,7 @@ SQLite Database Module — persistent storage for investigations, alerts, feeds,
 import sqlite3
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,13 +13,26 @@ DB_DIR = Path(__file__).resolve().parents[1] / "data"
 DB_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = str(DB_DIR / "tia.db")
 
+_RETRIES = int(os.getenv("SQLITE_RETRIES", "5"))
+_RETRY_DELAY = float(os.getenv("SQLITE_RETRY_DELAY", "0.05"))
+
 
 def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    last_err = None
+    for attempt in range(_RETRIES):
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=20)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            return conn
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                last_err = e
+                time.sleep(_RETRY_DELAY * (attempt + 1))
+            else:
+                raise
+    raise last_err or sqlite3.OperationalError("could not connect to database")
 
 
 def init_db():

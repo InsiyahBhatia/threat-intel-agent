@@ -1,15 +1,14 @@
 .tia-ioc {
-  background: rgba(29, 78, 216, 0.06);
-  border-bottom: 1px dashed rgba(29, 78, 216, 0.3);
+  background: rgba(29, 78, 216, 0.15) !important;
+  border-bottom: 2px solid rgba(29, 78, 216, 0.6) !important;
   border-radius: 2px;
   padding: 0 2px;
   cursor: pointer;
   transition: all 0.2s ease;
   position: relative;
   display: inline;
-  white-space: nowrap;
 }
-.tia-ioc:hover { background: rgba(29, 78, 216, 0.22); border-bottom-color: #1d4ed8; border-bottom-style: solid; box-shadow: 0 1px 0 rgba(29, 78, 216, 0.15); }
+.tia-ioc:hover { background: rgba(29, 78, 216, 0.30) !important; border-bottom-color: #1d4ed8 !important; }
 .tia-ioc.tia-loading {
   background: rgba(180, 83, 9, 0.1);
   border-bottom-color: #b45309;
@@ -18,12 +17,12 @@
 @keyframes tia-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 .tia-ioc.tia-done { background: rgba(22, 101, 52, 0.06); border-bottom-color: rgba(22, 101, 52, 0.25); }
 .tia-ioc.tia-err { background: rgba(185, 28, 42, 0.07); border-bottom-color: rgba(185, 28, 42, 0.3); }
-.tia-ioc[data-severity="CRITICAL"] { background: rgba(185, 28, 42, 0.08); border-bottom-color: #b91c2a; }
-.tia-ioc[data-severity="CRITICAL"]:hover { background: rgba(185, 28, 42, 0.22); border-bottom-color: #dc2626; border-bottom-style: solid; box-shadow: 0 1px 0 rgba(185, 28, 42, 0.2); }
-.tia-ioc[data-severity="HIGH"] { background: rgba(180, 83, 9, 0.08); border-bottom-color: #b45309; }
-.tia-ioc[data-severity="HIGH"]:hover { background: rgba(180, 83, 9, 0.22); border-bottom-color: #d97706; border-bottom-style: solid; box-shadow: 0 1px 0 rgba(180, 83, 9, 0.2); }
-.tia-ioc[data-severity="MEDIUM"] { background: rgba(180, 83, 9, 0.06); border-bottom-color: #b45309; }
-.tia-ioc[data-severity="MEDIUM"]:hover { background: rgba(180, 83, 9, 0.18); border-bottom-color: #b45309; border-bottom-style: solid; }
+.tia-ioc[data-severity="CRITICAL"] { background: rgba(185, 28, 42, 0.25) !important; border-bottom-color: #dc2626 !important; }
+.tia-ioc[data-severity="CRITICAL"]:hover { background: rgba(185, 28, 42, 0.40) !important; border-bottom-color: #ef4444 !important; }
+.tia-ioc[data-severity="HIGH"] { background: rgba(180, 83, 9, 0.25) !important; border-bottom-color: #d97706 !important; }
+.tia-ioc[data-severity="HIGH"]:hover { background: rgba(180, 83, 9, 0.40) !important; border-bottom-color: #f59e0b !important; }
+.tia-ioc[data-severity="MEDIUM"] { background: rgba(180, 83, 9, 0.18) !important; border-bottom-color: #b45309 !important; }
+.tia-ioc[data-severity="MEDIUM"]:hover { background: rgba(180, 83, 9, 0.30) !important; border-bottom-color: #d97706 !important; }
 
 .tia-badge {
   font-size: 7px; font-weight: 700; padding: 1px 3px; border-radius: 2px;
@@ -62,3 +61,10 @@
 .tia-tp-ft { font-size: 8px; color: #909097; margin-top: 4px; padding-top: 4px; border-top: 1px solid #353436; }
 
 @media print { .tia-ioc, .tia-badge, .tia-tp { display: none !important; } }
+
+/* Keyboard shortcut flash animation */
+@keyframes tia-flash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(29, 78, 216, 0.40); }
+  50% { box-shadow: 0 0 0 4px rgba(29, 78, 216, 0.10); }
+}
+.tia-kb-scan { animation: tia-flash 0.60s ease-in-out 2; }

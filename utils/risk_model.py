@@ -29,12 +29,13 @@ FEATURES = [
     "bruteforce_signal",
     "phishing_signal",
     "malware_signal",
+    "c2_signal",
     "clean_signal",
     "api_error_ratio",
 ]
 
 DEFAULT_MODEL = {
-    "version": 1,
+    "version": 2,
     "features": FEATURES,
     "bias": -2.25,
     "weights": {
@@ -48,6 +49,7 @@ DEFAULT_MODEL = {
         "bruteforce_signal": 0.8,
         "phishing_signal": 1.0,
         "malware_signal": 1.2,
+        "c2_signal": 1.4,
         "clean_signal": -1.6,
         "api_error_ratio": -0.25,
     },
@@ -98,7 +100,11 @@ def extract_features(text: str, ml_features: dict | None = None) -> dict[str, fl
 
     if ml_features is not None:
         tags = ml_features.get("tags", [])
-        has_phishing_tag = 1.0 if "phishing" in str(tags).lower() else 0.0
+        shodan_tags = ml_features.get("shodan_tags", [])
+        all_tags = [t.lower() for t in (list(tags) + list(shodan_tags))]
+        has_phishing_tag = 1.0 if "phishing" in str(all_tags) else 0.0
+        has_vt = ml_features.get("has_vt_data", 0)
+        has_abuse = ml_features.get("has_abuse_data", 0)
         return {
             "vt_malicious_ratio": min(ml_features.get("vt_malicious_ratio", 0.0), 1.0),
             "vt_suspicious_ratio": min(ml_features.get("vt_suspicious_count", 0) / 100.0, 1.0),
@@ -106,11 +112,12 @@ def extract_features(text: str, ml_features: dict | None = None) -> dict[str, fl
             "abuse_reports": min(math.log1p(ml_features.get("abuse_total_reports", 0)) / math.log1p(1000), 1.0),
             "cve_count": min(ml_features.get("shodan_cve_count", 0) / 10.0, 1.0),
             "tor_signal": ml_features.get("abuse_is_tor", 0.0) or ml_features.get("is_tor", 0.0),
-            "proxy_signal": 1.0 if ml_features.get("abuse_categories_count", 0) >= 2 else 0.0,
-            "bruteforce_signal": 1.0 if ml_features.get("abuse_confidence", 0) > 50 else 0.0,
+            "proxy_signal": 1.0 if any(w in all_tags for w in ["proxy", "vpn", "tor"]) else 0.0,
+            "bruteforce_signal": 1.0 if any(w in all_tags for w in ["brute", "ssh"]) or ml_features.get("abuse_confidence", 0) > 50 else 0.0,
             "phishing_signal": has_phishing_tag,
-            "malware_signal": 1.0 if ml_features.get("vt_malicious_ratio", 0) > 0.3 else 0.0,
-            "clean_signal": 1.0 if ml_features.get("vt_malicious_ratio", 0) < 0.01 and ml_features.get("abuse_confidence", 0) < 5 else 0.0,
+            "malware_signal": 1.0 if ml_features.get("vt_malicious_ratio", 0) > 0.3 or any(w in all_tags for w in ["malware", "trojan", "ransomware", "dropper", "infostealer"]) else 0.0,
+            "c2_signal": 1.0 if any(w in all_tags for w in ["c2", "c&c", "command and control", "botnet"]) else 0.0,
+            "clean_signal": 1.0 if (has_vt or has_abuse) and ml_features.get("vt_malicious_ratio", 0) < 0.01 and ml_features.get("abuse_confidence", 0) < 5 else 0.0,
             "api_error_ratio": 0.0,
         }
 
@@ -131,6 +138,7 @@ def extract_features(text: str, ml_features: dict | None = None) -> dict[str, fl
         "bruteforce_signal": _keyword(text, "brute force", "brute-force", "ssh"),
         "phishing_signal": _keyword(text, "phishing", "credential harvesting"),
         "malware_signal": _keyword(text, "malware", "trojan", "ransomware", "dropper", "infostealer"),
+        "c2_signal": _keyword(text, "c2", "c&c", "command and control", "botnet"),
         "clean_signal": _keyword(text, "clean", "no malicious", "low risk", "few or no abuse"),
         "api_error_ratio": _bounded(errors / sections),
     }

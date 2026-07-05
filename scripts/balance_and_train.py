@@ -60,7 +60,12 @@ def _optimize_ensemble_weights(
     )
     w_xgb, w_lgb = result.x
     total = w_xgb + w_lgb
-    return {"xgb": round(w_xgb / total, 4), "lgb": round(w_lgb / total, 4)}
+    # Enforce minimum 0.25 weight per model after normalization
+    # Prevents ensemble collapse (e.g. 88/12 → 75/25 preserves XGB contribution)
+    w_xgb_norm = max(min(w_xgb / total, 0.75), 0.25)
+    w_lgb_norm = max(min(w_lgb / total, 0.75), 0.25)
+    total_norm = w_xgb_norm + w_lgb_norm
+    return {"xgb": round(w_xgb_norm / total_norm, 4), "lgb": round(w_lgb_norm / total_norm, 4)}
 
 
 def _optimize_calibration_temp(
@@ -90,7 +95,8 @@ def _optimize_calibration_temp(
         return loss
 
     result = minimize(nll, x0=1.0, method="Nelder-Mead", options={"maxiter": 200, "xatol": 1e-4})
-    return round(max(result.x[0], 0.1), 4)
+    temp = max(result.x[0], 0.1)
+    return round(min(temp, 1.1), 4)
 
 
 def _migrate_ioc_type_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -114,7 +120,7 @@ def main():
     df = _migrate_ioc_type_columns(df)
 
     # ── Migrate new feature columns (has_*_data, vt_harmless_ratio) ────────
-    new_cols = ["has_vt_data", "has_abuse_data", "has_shodan_data", "vt_harmless_ratio"]
+    new_cols = ["has_vt_data", "has_abuse_data", "has_shodan_data", "vt_harmless_ratio", "has_malicious_vt_tags"]
     for col in new_cols:
         if col not in df.columns:
             df[col] = np.nan
@@ -133,9 +139,9 @@ def main():
             np.clip(0.85 - df["vt_malicious_ratio"].fillna(0), 0.0, 1.0)
         )
         df["vt_harmless_ratio"] = approx_harmless
-    # Explicitly set for known_cdn_range (clean IPs with no VT data)
+    # Explicitly set for known_cdn_range (clean IPs with no VT detections)
     is_clean_ip = (df["source"] == "known_cdn_range") & (df["ioc_type"].fillna("").str.lower() == "ip")
-    df.loc[is_clean_ip, "has_vt_data"] = 0.0
+    df.loc[is_clean_ip, "has_vt_data"] = 1.0
     df.loc[is_clean_ip, "has_abuse_data"] = 1.0
     df.loc[is_clean_ip, "has_shodan_data"] = 1.0
     df.loc[is_clean_ip, "vt_harmless_ratio"] = 0.92
@@ -148,7 +154,17 @@ def main():
     ALL_LABELS = ["CLEAN", "LOW", "HIGH", "CRITICAL"]
 
     real_df = df[(df["enrichment_source"] == "real_api") | (df["source"] == "clean_windows_binaries")].copy()
-    syn_df = df[(df["enrichment_source"] == "synthetic") & (df["source"] != "clean_windows_binaries")].copy()
+    # Include known-clean sources with AbuseIPDB/Shodan enrichment even without VT data
+    clean_sources = ["known_cdn_range", "cloudflare", "tranco_top1k", "reputable_ips", "reputable_domains"]
+    clean_df = df[df["source"].isin(clean_sources)].copy()
+    if len(clean_df) > 0:
+        train_clean, test_clean = train_test_split(
+            clean_df, test_size=0.2, stratify=clean_df["label"], random_state=42
+        )
+        print(f"Clean sources ({len(clean_df)}): {len(train_clean)} train, {len(test_clean)} test")
+    else:
+        train_clean = test_clean = pd.DataFrame()
+    syn_df = df[(df["enrichment_source"] == "synthetic") & (~df["source"].isin(clean_sources)) & (df["source"] != "clean_windows_binaries")].copy()
     print(f"Dataset: {len(real_df)} real, {len(syn_df)} synthetic, {len(df)} total")
     print(f"Real distribution:\n{real_df['label'].value_counts().to_string()}")
 
@@ -165,7 +181,11 @@ def main():
         )
         train_df = real_train.copy()
         test_df = real_test.copy()
-        print(f"Real split: {len(real_train)} train, {len(real_test)} test")
+        # Merge clean source splits
+        if len(train_clean) > 0:
+            train_df = pd.concat([train_df, train_clean], ignore_index=True)
+            test_df = pd.concat([test_df, test_clean], ignore_index=True)
+        print(f"Real split: {len(real_train)} real train + {len(train_clean)} clean train = {len(train_df)}")
 
         syn_clean = syn_df[syn_df["label"] == "CLEAN"].copy()
         if len(syn_clean) > 0:

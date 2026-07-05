@@ -155,6 +155,16 @@ def predict_ml_severity(features: dict) -> Optional[dict]:
         model_name = type(_MODEL).__name__
         per_model = [{"model": model_name, "prediction": pred_class, "confidence": int(round(raw_confidence * 100))}]
 
+    # CRITICAL confidence floor: downgrade to next-highest if < 75%
+    if pred_class == "CRITICAL" and raw_confidence < 0.75:
+        critical_idx = np.where(_LE.classes_ == "CRITICAL")[0][0]
+        sorted_idx = np.argsort(combined_proba)[::-1]
+        for idx in sorted_idx:
+            if idx != critical_idx:
+                pred_class = _LE.inverse_transform([idx])[0]
+                raw_confidence = combined_proba[idx]
+                break
+
     calibrated_confidence = _calibrate_confidence(raw_confidence)
     confidence = int(round(calibrated_confidence * 100))
 

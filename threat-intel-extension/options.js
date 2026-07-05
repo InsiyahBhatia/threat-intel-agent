@@ -22,8 +22,8 @@
       if (chrome.runtime.lastError) { showStat('Save failed', 'err'); return; }
       showStat('Saved', 'suc');
       try {
-        chrome.runtime.sendMessage({ type: 'settings-updated', apiBase: clean }, function (resp) {
-          var err = chrome.runtime.lastError;
+        chrome.runtime.sendMessage({ type: 'settings-updated', apiBase: clean }, function () {
+          if (chrome.runtime.lastError) { /* background may have restarted */ }
         });
       } catch (e) {}
     });

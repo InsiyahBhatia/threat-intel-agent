@@ -1,35 +1,35 @@
 {
   "learning_curve": {
-    "gap": 0.1567585551926316,
-    "train_loss": 0.25327245821642835,
-    "val_loss": 0.41003101340905995
+    "gap": 0.14607019588947612,
+    "train_loss": 0.26397435171108324,
+    "val_loss": 0.41004454760055936
   },
   "cross_validation": {
-    "mean_f1": 0.7725908534887929,
-    "std_f1": 0.015577343959028144,
+    "mean_f1": 0.7836422844328147,
+    "std_f1": 0.018877072269717066,
     "fold_f1s": [
-      0.7561,
-      0.7902,
-      0.7518,
-      0.7837,
-      0.7813
+      0.7631,
+      0.8039,
+      0.7619,
+      0.8055,
+      0.7838
     ]
   },
   "imbalanced_test": {
-    "f1_macro": 0.7497
+    "f1_macro": 0.7872
   },
   "feature_importance": {
     "top10_gain": {
-      "malicious_family": 0.4115999937057495,
-      "abuse_confidence": 0.1348000019788742,
-      "abuse_distinct_users": 0.0820000022649765,
-      "is_hash": 0.04910000041127205,
-      "vt_malicious_ratio": 0.035100001841783524,
-      "threat_signal_sum": 0.03370000049471855,
-      "tor_reputation_risk": 0.0272000003606081,
-      "abuse_total_reports": 0.02370000071823597,
-      "abuse_is_tor": 0.0210999995470047,
-      "port_attack_surface": 0.019600000232458115
+      "malicious_family": 0.43309998512268066,
+      "abuse_confidence": 0.120899997651577,
+      "abuse_distinct_users": 0.06310000270605087,
+      "is_hash": 0.05270000174641609,
+      "vt_malicious_ratio": 0.03700000047683716,
+      "threat_signal_sum": 0.03280000016093254,
+      "vt_reputation": 0.029100000858306885,
+      "abuse_total_reports": 0.02500000037252903,
+      "has_known_family": 0.023000000044703484,
+      "tor_reputation_risk": 0.02250000089406967
     }
   },
   "temporal_split": {
@@ -37,11 +37,11 @@
   },
   "data_leakage": {
     "top5_mi": {
-      "abuse_confidence": 0.573,
-      "abuse_distinct_users": 0.547,
-      "abuse_total_reports": 0.5462,
-      "vt_malicious_ratio": 0.4904,
-      "reports_per_user": 0.4632
+      "abuse_confidence": 0.5748,
+      "abuse_distinct_users": 0.565,
+      "abuse_total_reports": 0.5472,
+      "vt_malicious_ratio": 0.4798,
+      "reports_per_user": 0.455
     }
   },
   "verdict": "REVIEW"

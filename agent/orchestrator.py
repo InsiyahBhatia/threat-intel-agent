@@ -94,7 +94,7 @@ def _extract_mitre_techniques(text: str) -> list[dict]:
     techniques = []
     seen = set()
     pattern = re.compile(
-        r"\[(T\d{4}(?:\.\d{3})?)\]\s+([^\n]+?)\s+(?:->|→)\s+([^\n]+)",
+        r"\[(T\d{4}(?:\.\d{3})?)\]\s+([^\n]+?)\s+(?:->|→|–)\s+([^\n]+)",
         re.IGNORECASE,
     )
     for match in pattern.finditer(text):
@@ -224,13 +224,21 @@ def build_structured_report(
         model_version = 2
     else:
         has_enrichment = ml_features_dict and any(ml_features_dict.get(k, 0) for k in ("has_vt_data", "has_abuse_data", "has_shodan_data"))
-        prediction = predict_risk(evidence, ml_features=ml_features_dict if has_enrichment else None)
-        primary_severity = prediction.severity
-        primary_confidence = prediction.confidence_score
-        risk_score = prediction.risk_score
-        risk_features = prediction.features
-        model_name = "local-ioc-risk-model"
-        model_version = prediction.model_version
+        if ml_features_dict is not None and not has_enrichment:
+            primary_severity = "UNKNOWN"
+            primary_confidence = 0
+            risk_score = 0.0
+            risk_features = {}
+            model_name = "local-ioc-risk-model"
+            model_version = 1
+        else:
+            prediction = predict_risk(evidence, ml_features=ml_features_dict if has_enrichment else None)
+            primary_severity = prediction.severity
+            primary_confidence = prediction.confidence_score
+            risk_score = prediction.risk_score
+            risk_features = prediction.features
+            model_name = "local-ioc-risk-model"
+            model_version = prediction.model_version
 
     base = ThreatReport(
         ioc=ioc,
@@ -390,16 +398,18 @@ def investigate(ioc: str) -> dict:
     if ioc in DEMO_FIXTURES:
         evidence = DEMO_FIXTURES[ioc]
         intermediate_steps = []
-        features = extract_ml_features(ioc_type, {}, {}, {}, {})
-        ml_result = predict_ml_severity(features)
+        features = None
+        ml_result = None
     else:
         evidence, intermediate_steps, ml_result, features = _build_local_evidence(ioc, ioc_type)
 
     # Append ML verdict block to evidence text when available
     if ml_result:
         has_enrichment = features and any(features.get(k, 0) for k in ("has_vt_data", "has_abuse_data", "has_shodan_data"))
-        logistic = predict_risk(evidence, ml_features=features if has_enrichment else None).severity
-        ml_block = _ml_verdict_block(ml_result, logistic)
+        logistic_sev = "UNKNOWN"
+        if has_enrichment:
+            logistic_sev = predict_risk(evidence, ml_features=features).severity
+        ml_block = _ml_verdict_block(ml_result, logistic_sev)
         evidence = evidence + "\n\n" + ml_block
 
     report = build_structured_report(ioc, ioc_type, evidence, ml_result, features)

@@ -25,6 +25,7 @@ def _query_ip(ip: str) -> dict:
     return {
         "malicious_votes": stats.get("malicious", 0),
         "suspicious_votes": stats.get("suspicious", 0),
+        "harmless_votes": stats.get("harmless", 0),
         "total_engines": sum(stats.values()),
         "country": data.get("country", "Unknown"),
         "asn": data.get("asn", "Unknown"),
@@ -42,7 +43,9 @@ def _query_domain(domain: str) -> dict:
     return {
         "malicious_votes": stats.get("malicious", 0),
         "suspicious_votes": stats.get("suspicious", 0),
+        "harmless_votes": stats.get("harmless", 0),
         "total_engines": sum(stats.values()),
+        "reputation": data.get("reputation", 0),
         "categories": data.get("categories", {}),
         "registrar": data.get("registrar", "Unknown"),
         "creation_date": data.get("creation_date", "Unknown"),
@@ -58,6 +61,7 @@ def _query_hash(file_hash: str) -> dict:
     return {
         "malicious_votes": stats.get("malicious", 0),
         "suspicious_votes": stats.get("suspicious", 0),
+        "harmless_votes": stats.get("harmless", 0),
         "total_engines": sum(stats.values()),
         "file_type": data.get("type_description", "Unknown"),
         "file_size": data.get("size", 0),

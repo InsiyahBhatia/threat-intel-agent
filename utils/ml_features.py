@@ -60,6 +60,7 @@ _NEW_COLS: list[str] = [
     "has_abuse_data",
     "has_shodan_data",
     "vt_harmless_ratio",
+    "has_malicious_vt_tags",
 ]
 
 FEATURE_COLS: list[str] = _BASE_COLS + _DERIVED_COLS + _NEW_COLS
@@ -95,8 +96,7 @@ def extract_ml_features(
     abuse_total_reports = float(ab.get("total_reports", 0))
     abuse_distinct_users = float(ab.get("distinct_users", 0))
     abuse_is_tor = float(bool(ab.get("is_tor", False)))
-    abuse_categories = ab.get("categories", [])
-    abuse_categories_count = float(len(abuse_categories) if isinstance(abuse_categories, list) else 0)
+    abuse_categories_count = float(ab.get("categories_count", 0))
 
     shodan_open_ports = sh.get("open_ports", [])
     shodan_open_ports_count = float(len(shodan_open_ports))
@@ -130,6 +130,11 @@ def extract_ml_features(
 
     harmless = vt.get("harmless_votes", 0)
     vt_harmless_ratio = float(harmless / total_engines) if total_engines > 1 else 0.0
+
+    # Check VT + Shodan tags for malicious keywords (works for all IOC types)
+    _MALICIOUS_TAG_KEYWORDS = {"malware", "c2", "c&c", "command and control", "trojan", "ransomware", "botnet", "phishing", "malicious", "dropper", "loader", "backdoor", "spyware", "worm", "exploit", "rat", "infostealer"}
+    all_tags = [t.lower() for t in tags] + [t.lower() for t in sh.get("tags", [])]
+    has_malicious_vt_tags = 1.0 if any(kw in t for t in all_tags for kw in _MALICIOUS_TAG_KEYWORDS) else 0.0
 
     # ── Derived interaction/ratio features ──────────────────────────────────
 
@@ -209,10 +214,12 @@ def extract_ml_features(
         "has_abuse_data": has_abuse_data,
         "has_shodan_data": has_shodan_data,
         "vt_harmless_ratio": round(vt_harmless_ratio, 6),
+        "has_malicious_vt_tags": has_malicious_vt_tags,
     }
 
     # Include raw tags list as metadata (not a model feature) for downstream consumers
-    features["tags"] = list(tags)  # plain list, not numpy array
+    features["tags"] = list(tags)
+    features["shodan_tags"] = list(sh.get("tags", []))
 
     for col in FEATURE_COLS:
         features.setdefault(col, 0.0)

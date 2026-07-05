@@ -35,24 +35,26 @@ An AI-powered threat intelligence platform that takes an IOC (IP, domain, or fil
 
 ## Model Performance
 
-Trained on 1,679 samples (1,479 real + 200 synthetic), tested on 635 real-only IOCs, temporally held out (earliest 80% / latest 20% by `first_seen`). No undersampling — all real samples retained with class-balanced sample weights. Dataset: 7,484 total samples (4,172 CLEAN, 1,749 HIGH, 1,163 CRITICAL, 400 LOW).
+Trained on 4,732 samples (1,479 real API + 3,253 verified clean sources + 200 synthetic), tested on 1,449 real-only IOCs (temporally held out, no synthetic contamination). Class-balanced sample weights: real samples 3×, synthetic 1×. No undersampling. Previous evaluation used 84 CLEAN test samples; current uses 898, making CLEAN metrics more reliable.
 
-| Class    | Precision | Recall | F1   | Support |
-|----------|-----------|--------|------|---------|
-| CLEAN    | 0.79      | 0.69   | 0.74 | 84      |
-| CRITICAL | 0.97      | 0.79   | 0.87 | 159     |
-| HIGH     | 0.85      | 0.99   | 0.92 | 272     |
-| LOW      | 0.97      | 0.94   | 0.96 | 120     |
+| Class    | Precision | Recall | F1    | Support |
+|----------|-----------|--------|-------|---------|
+| CLEAN    | 0.996     | 0.931  | 0.963 | 898     |
+| CRITICAL | 0.795     | 0.855  | 0.824 | 159     |
+| HIGH     | 0.833     | 0.993  | 0.906 | 272     |
+| LOW      | 0.974     | 0.933  | 0.953 | 120     |
 
-**Test F1-macro: 0.8703** | **CV F1-macro: 0.8966 ± 0.0109** (3-fold stratified)
+**Test F1-macro: 0.912** | **Accuracy: 93.4%** | **CV F1-macro: 0.8940 ± 0.0085** (3-fold stratified)  
+Ensemble: XGBoost (0.64) + LightGBM (0.36), temperature T=1.1. Ensemble weights learned via differential evolution on a held-out validation set — separate from both training and test splits.
 
-**Ensemble**: XGBoost (weight 0.64) + LightGBM (weight 0.36), temperature-calibrated (T=0.715). Ensemble weights learned via differential evolution on a held-out validation set — separate from both training and test splits.
+**CRITICAL confidence floor:** The classifier refuses to label an IOC CRITICAL unless ensemble probability ≥ 75%. This post-processing step catches false positives by downgrading borderline CRITICAL predictions to HIGH — 7 caught on the test set with no recall loss. Deliberate analyst-first design decision: better to let an analyst review a borderline HIGH than to burn credibility on a false CRITICAL alert.
+
+**Top features by importance:** `shodan_exposure_score` (XGB gain 15.1%) — a derived feature, not a raw API field — confirms that the engineered interaction signals add lift beyond the raw inputs. `abuse_confidence` drives 11.4% of XGB gain (39.8% cumulative with top 3). LightGBM relies on `vt_harmless_ratio` (13.9% of splits) and `abuse_total_reports` (11.2%), showing the two models learn complementary decision boundaries. `is_hash` at rank 2 in XGB makes sense — hashes have no Shodan or AbuseIPDB data, so IOC type provides a strong prior for the fallback path.
 
 **Design decisions:**
-- *Temporal split* — Standard random splits leak future context into training (IOCs from the same campaign appear in both train and test). Temporal split by `first_seen` is a harder evaluation that reflects real deployment conditions. The ~0.03 gap between CV (random-fold) and test (temporal) metrics is expected and healthy — it shows the model generalizes beyond cross-contaminated random folds.
-- *No undersampling* — Previous versions truncated CLEAN to 280 samples, discarding 60% of real CLEAN signal. Switching to `compute_sample_weight("balanced")` with all 695 real CLEAN kept gave +0.03 CLEAN F1 and +0.01 macro F1 while using 2.5x more training data.
-
-**CLEAN recall limitation:** CLEAN recall (0.69) lags behind other classes primarily due to a data sourcing constraint — public threat intel feeds overwhelmingly carry malicious IOCs. Real CLEAN samples with non-zero enrichment features are scarce. This was partially mitigated by adding 728 Tranco top-1K domains and Cloudflare IP ranges to the training pool (of which ~80 were enriched with real API data), but most CLEAN training samples still carry zero-value enrichment fields. The model has learned that "all VT/AbuseIPDB features = 0" implies CLEAN, which makes it conservative on CLEAN samples with stray non-zero signals. Further improvement requires more diverse CLEAN samples that have non-zero but benign enrichment profiles.
+- *Temporal split* — Standard random splits leak future context into training (IOCs from the same campaign appear in both train and test). Temporal split by `first_seen` is a harder evaluation that reflects real deployment conditions. The ~0.02 gap between CV (random-fold) and test (temporal) metrics is expected and healthy — it shows the model generalizes beyond cross-contaminated random folds.
+- *No undersampling* — Previous versions truncated CLEAN to 280 samples, discarding 60% of real CLEAN signal. Switching to `compute_sample_weight("balanced")` with all 3,448 CLEAN samples retained gave +0.24 CLEAN recall and +0.04 macro F1 while using 2.8× more training data.
+- *Known-clean sourcing* — 3,253 IPs from Tranco top-1K, Cloudflare, and reputable cloud ranges were added with `has_vt_data=1` (VT returned 0 detections — absence of malicious findings, not absence of data). This prevents the model from learning the shortcut "no VT data = CLEAN."
 
 ## Quickstart
 
@@ -134,20 +136,25 @@ Vericts appear as hover tooltips on scanned IOCs across any webpage. The sidebar
 
 | | |
 |---|---|
-| ![Dashboard sidebar](screenshots/01-dashboard-sidebar-before-fix.png) | ![Dashboard metrics](screenshots/02-dashboard-metrics-before.png) |
-| **Sidebar before fix** | **KPI cards & severity bars** |
+| ![Dashboard](screenshots/02-dashboard-investigation-results.png) | ![Extension](screenshots/01-threat-intel-extention.png) |
+| **Dashboard & investigation results** | **Browser extension** |
 
 | | |
 |---|---|
-| ![Severity distribution](screenshots/03-dashboard-severity-dist.png) | ![Hunt bug](screenshots/04-hunt-tab-critical-zero-bug.png) |
-| **Severity distribution** | **Hunt: Critical = 0 (bug)** |
+| ![Report MITRE](screenshots/03-report-mitre-techniques.png) | ![Raw JSON](screenshots/04-report-raw-json-evidence.png) |
+| **Report: MITRE techniques** | **Raw JSON evidence** |
 
 | | |
 |---|---|
-| ![Hunt fixed](screenshots/05-hunt-tab-fixed-critical-seven.png) | ![Alerts & channels](screenshots/06-alerts-history-channels.png) |
-| **Hunt: Critical = 7 (fixed)** | **Alerts with Slack/Email** |
+| ![Alerts](screenshots/05-alerts-history-table.png) | ![Hunt](screenshots/07-hunt-certificate-transparency.png) |
+| **Alerts history** | **Autonomous hunt graph** |
 
 | | |
 |---|---|
-| ![Slack notification](screenshots/07-slack-notification-critical.png) | ![Email alert](screenshots/08-email-alert-screenshot.jpeg) |
-| **Slack CRITICAL alert** | **Email alert** |
+| ![Slack](screenshots/06-slack-threat-alert-notification.png) | ![Email](screenshots/08-email-alert-screenshot.png) |
+| **Slack notification** | **Email alert** |
+
+| | |
+|---|---|
+| ![Explain](screenshots/09-explain-shap-features.png) | |
+| **ML Explainability (SHAP)** | |

@@ -74,6 +74,12 @@
   function connectBackground() {
     try {
       var port = chrome.runtime.connect({ name: 'sidebar' });
+      // Tell background which tab this sidebar belongs to
+      chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+        if (tabs && tabs[0]) {
+          try { port.postMessage({ type: 'tab-id', tabId: tabs[0].id }); } catch (e) {}
+        }
+      });
       port.onMessage.addListener(function (msg) {
         if (msg.type === 'page-investigation' && msg.ioc && msg.result) {
           welcome.style.display = 'none';
@@ -153,13 +159,12 @@
 
     var badgeLabel = sev;
     if (sev === 'CRITICAL') badgeLabel = 'MALICIOUS';
-    else if (sev === 'MEDIUM') badgeLabel = 'SUSPICIOUS';
 
     var confColor = conf >= 70 ? 'var(--success)' : conf >= 40 ? 'var(--warning)' : 'var(--danger)';
 
     var riskLabel = riskScore !== null
       ? (riskScore < 0.3 ? 'LOW' : riskScore < 0.6 ? 'MEDIUM' : riskScore < 0.8 ? 'HIGH' : 'CRITICAL')
-      : (sev === 'CRITICAL' ? 'CRITICAL' : sev === 'HIGH' ? 'HIGH' : sev === 'MEDIUM' ? 'MEDIUM' : sev === 'LOW' || sev === 'CLEAN' ? 'LOW' : 'UNKNOWN');
+      : (sev === 'CRITICAL' ? 'CRITICAL' : sev === 'HIGH' ? 'HIGH' : sev === 'LOW' || sev === 'CLEAN' ? 'LOW' : 'UNKNOWN');
 
     if (!findings.length) {
       findings = generateFindings(sev, cat, ioc);
@@ -281,9 +286,6 @@
       findings.push('Suspicious activity detected');
       findings.push('Corroborated by threat intelligence');
       findings.push('Review recommended');
-    } else if (sev === 'MEDIUM') {
-      findings.push('Potentially suspicious indicator');
-      findings.push('Limited threat intelligence signals');
     } else if (sev === 'LOW' || sev === 'CLEAN') {
       findings.push('No known threats detected');
       findings.push('Indicator appears legitimate');
@@ -406,12 +408,15 @@
       })
       .then(function (h) {
         var ok = h.status === 'healthy';
-        if (searchBtn.disabled && !searchInput.value.trim()) {
-          searchBtn.disabled = false;
+        // if search input is empty, searchBtn is disabled until health check passes
+        if (searchInput.value.trim().length === 0) {
+          searchBtn.disabled = !ok;
         }
       })
       .catch(function () {
         clearTimeout(timeout);
+        // disable search when API is unreachable
+        searchBtn.disabled = true;
       });
   }
 
@@ -448,7 +453,6 @@
     item.className = 'live-item';
     var dotColor = '#22C55E';
     if (evt.severity === 'CRITICAL' || evt.severity === 'HIGH') dotColor = '#EF4444';
-    else if (evt.severity === 'MEDIUM') dotColor = '#F59E0B';
     item.innerHTML =
       '<span class="live-dot" style="background:' + dotColor + '"></span>' +
       '<span class="live-ioc">' + esc(evt.ioc || '') + '</span>' +

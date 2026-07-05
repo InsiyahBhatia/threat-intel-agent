@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional
-import sys, os, re, json, asyncio, hashlib, logging
+import sys, os, re, json, asyncio, hashlib, logging, threading
 from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime, timezone
@@ -37,10 +37,47 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:8000").split(","),
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+TIA_API_KEY = os.getenv("TIA_API_KEY", "")
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if TIA_API_KEY:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer ") or auth.removeprefix("Bearer ") != TIA_API_KEY:
+            if request.url.path not in ("/health", "/", "/docs", "/openapi.json"):
+                from fastapi.responses import JSONResponse
+                return JSONResponse(status_code=401, content={"detail": "Missing or invalid API key. Set Authorization: Bearer <key> header."})
+    return await call_next(request)
+
+_RATE_LIMIT_CACHE: dict[str, list[float]] = {}
+_RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "60"))
+_RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if request.url.path in ("/health", "/", "/docs", "/openapi.json"):
+        return await call_next(request)
+    client_ip = request.client.host if request.client else "unknown"
+    now = asyncio.get_event_loop().time()
+    timestamps = _RATE_LIMIT_CACHE.setdefault(client_ip, [])
+    timestamps[:] = [t for t in timestamps if now - t < _RATE_LIMIT_WINDOW]
+    if len(timestamps) >= _RATE_LIMIT_REQUESTS:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Try again later."})
+    timestamps.append(now)
+    return await call_next(request)
+
+_BG_TASKS: set[asyncio.Task] = set()
+
+def _run_bg(coro) -> None:
+    task = asyncio.create_task(coro)
+    _BG_TASKS.add(task)
+    task.add_done_callback(_BG_TASKS.discard)
 
 class InvestigateRequest(BaseModel):
     ioc: str
@@ -153,7 +190,7 @@ async def chat_endpoint(req: ChatRequest):
             crit  = summary["critical_high"]
             depth = summary["depth_reached"]
 
-            asyncio.create_task(_notify_hunt_results(critical_high_nodes))
+            _run_bg(_notify_hunt_results(critical_high_nodes))
 
             response_text = (
                 f"🔍 **Autonomous hunt complete.** Starting from `{ioc}`, I traced the infrastructure "
@@ -203,8 +240,8 @@ async def chat_endpoint(req: ChatRequest):
             actions    = report.get("recommended_actions", [])[:2]
 
             if sev in ("CRITICAL", "HIGH"):
-                asyncio.create_task(_fire_webhooks(sev, ioc, report))
-                asyncio.create_task(_notify_and_log(ioc, sev, report))
+                _run_bg(_fire_webhooks(sev, ioc, report))
+                _run_bg(_notify_and_log(ioc, sev, report))
 
             # One-line VT summary
             vt_line = ""
@@ -542,10 +579,37 @@ def remove_webhook(hook_id: str):
     _save_active_workspace(ws)
     return {"status": "ok", "deleted": hook_id}
 
+def _is_safe_url(url: str) -> bool:
+    """SSRF protection: only allow HTTP/HTTPS to non-private IPs."""
+    from urllib.parse import urlparse
+    import ipaddress
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = parsed.hostname or ""
+        if host in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
+            return False
+        try:
+            addr = ipaddress.ip_address(host)
+            if addr.is_private or addr.is_loopback or addr.is_link_local:
+                return False
+        except ValueError:
+            pass
+        return True
+    except Exception:
+        return False
+
 async def _fire_webhooks(severity: str, ioc: str, report: dict) -> None:
     """Fire webhooks asynchronously without blocking the response."""
     ws = _get_active_workspace()
     hooks = ws.get("webhooks", [])
+    if not hooks: return
+    safe_hooks = [h for h in hooks if _is_safe_url(h.get("url", ""))]
+    unsafe = len(hooks) - len(safe_hooks)
+    if unsafe:
+        logger.warning(f"Skipping {unsafe} webhooks with disallowed URLs (SSRF guard)")
+    hooks = safe_hooks
     if not hooks: return
     payload = json.dumps({
         "event": "ioc_detected",
@@ -569,10 +633,15 @@ async def _fire_webhooks(severity: str, ioc: str, report: dict) -> None:
                     log_alert(ioc, severity, "webhook", "failed", error=str(e))
 
 
+_NOTIFIED_HUNT_IOCS: set[str] = set()
+
 async def _notify_hunt_results(critical_high_nodes: list[tuple[str, str]]) -> None:
-    """Send notifications for hunt-discovered CRITICAL/HIGH IOCs."""
+    """Send notifications for hunt-discovered CRITICAL/HIGH IOCs (deduplicated)."""
     from agent.orchestrator import investigate
     for ioc, severity in critical_high_nodes:
+        if ioc in _NOTIFIED_HUNT_IOCS:
+            continue
+        _NOTIFIED_HUNT_IOCS.add(ioc)
         try:
             result = await asyncio.to_thread(investigate, ioc)
             report = result.get("report", {})
@@ -714,10 +783,14 @@ class ExplainRequest(BaseModel):
 
 _SHAP_EXPLAINER = None
 _SHAP_FEATURE_COLS = None
+_SHAP_LOCK = threading.Lock()
 
 def _get_shap_explainer():
     global _SHAP_EXPLAINER, _SHAP_FEATURE_COLS
     if _SHAP_EXPLAINER is None:
+        with _SHAP_LOCK:
+            if _SHAP_EXPLAINER is not None:
+                return _SHAP_EXPLAINER, _SHAP_FEATURE_COLS
         try:
             import joblib, shap, pandas as pd
             artifact = joblib.load(os.path.join(ROOT_DIR, "models", "severity_classifier.joblib"))
@@ -1009,8 +1082,8 @@ async def investigate_ioc_async(request: InvestigateRequest):
         # Fire webhooks asynchronously
         severity = result.get("severity", "UNKNOWN")
         if severity in ("CRITICAL", "HIGH"):
-            asyncio.create_task(_fire_webhooks(severity, result["ioc"], result.get("report", {})))
-            asyncio.create_task(_send_notification_async(result["ioc"], severity, result.get("report", {})))
+            _run_bg(_fire_webhooks(severity, result["ioc"], result.get("report", {})))
+            _run_bg(_send_notification_async(result["ioc"], severity, result.get("report", {})))
 
         return InvestigateResponse(
             ioc=result["ioc"],
@@ -1382,7 +1455,7 @@ async def push_to_opencti():
         return {"status": "ok", "pushed": 0}
     import httpx
     pushed = 0
-    async with httpx.AsyncClient(verify=False, timeout=15) as client:
+    async with httpx.AsyncClient(verify=cfg.get("verify_ssl", True), timeout=15) as client:
         for entry in critical_high:
             r = entry.get("report", {})
             query = """
@@ -1483,7 +1556,7 @@ async def create_thehive_case(severity_filter: str = "HIGH"):
         "observables": observables,
     }
     try:
-        async with httpx.AsyncClient(verify=False, timeout=15) as client:
+        async with httpx.AsyncClient(verify=cfg.get("verify_ssl", True), timeout=15) as client:
             resp = await client.post(
                 f"{cfg['url'].rstrip('/')}/api/alert",
                 json=alert,
@@ -1677,4 +1750,7 @@ async def _notify_and_log(ioc: str, severity: str, report: dict) -> None:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    host = os.getenv("TIA_HOST", "127.0.0.1")
+    port = int(os.getenv("TIA_PORT", "8000"))
+    reload_enabled = os.getenv("TIA_RELOAD", "false").lower() == "true"
+    uvicorn.run("main:app", host=host, port=port, reload=reload_enabled)

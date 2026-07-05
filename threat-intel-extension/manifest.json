@@ -8,14 +8,27 @@
     "activeTab",
     "storage",
     "notifications",
-    "scripting",
     "alarms",
     "sidePanel"
   ],
   "host_permissions": [
-    "http://localhost:*/*",
-    "https://localhost:*/*"
+    "http://*/*",
+    "https://*/*"
   ],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Ctrl+Shift+I" },
+      "description": "Open Threat Intel sidebar"
+    },
+    "investigate-selection": {
+      "suggested_key": { "default": "Ctrl+Shift+T" },
+      "description": "Investigate selected IOC"
+    },
+    "scan-page": {
+      "suggested_key": { "default": "Ctrl+Shift+S" },
+      "description": "Scan page for IOCs"
+    }
+  },
   "side_panel": {
     "default_path": "sidebar.html"
   },
@@ -51,5 +64,14 @@
     "32": "icons/brand-icon.png",
     "48": "icons/brand-icon.png",
     "128": "icons/brand-icon.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/brand-icon.png", "styles.css"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
   }
 }

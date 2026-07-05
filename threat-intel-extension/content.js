@@ -3,8 +3,10 @@
   document.documentElement.setAttribute('data-tia', '1');
 
   var tooltipTimer = null, tooltipEl = null, tooltipLeaveTimer = null, scanTimer = null;
+  var tooltipTarget = null;
   var reportedIocs = new Set();
   var reportBatch = [];
+  var MAX_SIGHTINGS = 5000;
   var reportTimer = null;
   var PATTERNS = [
     { name: 'ip', re: /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b/g },
@@ -28,10 +30,12 @@
     var obs = new MutationObserver(function (mutations) {
       if (scanTimer) clearTimeout(scanTimer);
       scanTimer = setTimeout(function () {
-        for (var i = 0; i < mutations.length; i++) {
+        var scanned = 0;
+        var MAX_PER_CYCLE = 50;
+        for (var i = 0; i < mutations.length && scanned < MAX_PER_CYCLE; i++) {
           var nodes = mutations[i].addedNodes;
-          for (var j = 0; j < nodes.length; j++) {
-            if (nodes[j].nodeType === 1) scanNode(nodes[j]);
+          for (var j = 0; j < nodes.length && scanned < MAX_PER_CYCLE; j++) {
+            if (nodes[j].nodeType === 1) { scanNode(nodes[j]); scanned++; }
           }
         }
         scanTimer = null;
@@ -74,6 +78,11 @@
       var key = matches[m].value + '@' + matches[m].type;
       if (!reportedIocs.has(key)) {
         reportedIocs.add(key);
+        // cap to prevent memory leaks on long-lived SPAs
+        if (reportedIocs.size > MAX_SIGHTINGS) {
+          var first = reportedIocs.values().next().value;
+          if (first) reportedIocs.delete(first);
+        }
         reportBatch.push({ ioc: matches[m].value, typeLabel: matches[m].type });
       }
     }
@@ -99,15 +108,14 @@
     span.setAttribute('data-ioc', value);
     span.setAttribute('data-type', type);
 
-    var mx = 0, my = 0;
-    span.addEventListener('mousemove', function (e) { mx = e.clientX; my = e.clientY; });
-    span.addEventListener('mouseenter', function () {
+    span.addEventListener('mouseenter', function (e) {
       if (tooltipTimer) clearTimeout(tooltipTimer);
       if (tooltipLeaveTimer) clearTimeout(tooltipLeaveTimer);
+      var cx = e.clientX, cy = e.clientY;
       if (tooltipEl) {
-        positionTooltipAt(mx, my);
+        positionTooltipAt(cx, cy);
       } else {
-        tooltipTimer = setTimeout(function () { showTooltip(span, mx, my); }, 100);
+        tooltipTimer = setTimeout(function () { showTooltip(span, cx, cy); }, 100);
       }
     });
     span.addEventListener('mouseleave', function () {
@@ -125,6 +133,7 @@
     if (tooltipEl) tooltipEl.remove();
     tooltipEl = document.createElement('div');
     tooltipEl.className = 'tia-tp';
+    tooltipTarget = el;
 
     var typeEl = document.createElement('span');
     typeEl.className = 'tia-tp-type';
@@ -189,6 +198,7 @@
   function hideTooltip() {
     if (tooltipEl) { tooltipEl.remove(); tooltipEl = null; }
     if (tooltipTimer) { clearTimeout(tooltipTimer); tooltipTimer = null; }
+    tooltipTarget = null;
   }
 
   function investigate(el) {
@@ -240,8 +250,20 @@
 
   chrome.runtime.onMessage.addListener(function (msg, sender, respond) {
     switch (msg.type) {
-      case 'scan-page': scan(); respond({ ok: true }); break;
+      case 'scan-page':
+        scan();
+        // flash all highlighted IOCs to show scan completed
+        var iocs = document.querySelectorAll('.tia-ioc');
+        iocs.forEach(function (el, i) {
+          setTimeout(function () { el.classList.add('tia-kb-scan'); }, i * 20);
+          setTimeout(function () { el.classList.remove('tia-kb-scan'); }, i * 20 + 1200);
+        });
+        respond({ ok: true, count: iocs.length });
+        break;
       case 'get-iocs': respond({ count: document.querySelectorAll('.tia-ioc').length }); break;
+      case 'get-selection':
+        respond({ text: window.getSelection ? window.getSelection().toString() : '' });
+        break;
       case 'investigation-result':
         if (msg.ioc) {
           var els = document.querySelectorAll('[data-ioc="' + escapeCSS(msg.ioc) + '"]');
@@ -256,15 +278,19 @@
     return true;
   });
 
-  window.addEventListener('scroll', hideTooltip, { passive: true });
+  window.addEventListener('scroll', function () {
+    if (tooltipTarget) hideTooltip();
+  }, { passive: true });
   init();
 
   function flushReports() {
     if (reportBatch.length === 0) return;
-    var batch = reportBatch.slice();
-    reportBatch = [];
+    var batch = reportBatch.splice(0); // clear the batch
     try {
-      chrome.runtime.sendMessage({ type: 'ioc-detected', ioc: batch[0].ioc, typeLabel: batch[0].typeLabel, severity: null }).catch(function () {});
+      // send each IOC individually since the background listener expects single items
+      batch.forEach(function (item) {
+        chrome.runtime.sendMessage({ type: 'ioc-detected', ioc: item.ioc, typeLabel: item.typeLabel, severity: null }).catch(function () {});
+      });
     } catch (e) {}
   }
 

@@ -18,6 +18,15 @@ const seenIocs = new Set();
 let sidebarPorts = [];
 let alertCount = 0;
 
+// AbortSignal.timeout polyfill for older Chrome (< 110)
+if (!AbortSignal.timeout) {
+  AbortSignal.timeout = function (ms) {
+    var ctrl = new AbortController();
+    setTimeout(function () { ctrl.abort(); }, ms);
+    return ctrl.signal;
+  };
+}
+
 chrome.storage.sync.get({ apiBase: apiBase }, function (items) {
   apiBase = items.apiBase;
   refreshBlocklist();
@@ -48,11 +57,53 @@ chrome.alarms.onAlarm.addListener(function (alarm) {
   if (alarm.name === 'poll-alerts') pollAlerts();
 });
 
+// Keyboard command handler
+chrome.commands.onCommand.addListener(function (cmd) {
+  if (cmd === 'investigate-selection') {
+    chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+      if (tabs && tabs[0]) {
+        // ask content script for selected text
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'get-selection' }, function (resp) {
+          if (chrome.runtime.lastError || !resp || !resp.text) {
+            // fallback: open sidebar
+            try { chrome.sidePanel.open({ tabId: tabs[0].id }); } catch (e) {}
+            return;
+          }
+          var text = resp.text.trim().split(/\s+/)[0];
+          if (!isValidIoc(text)) {
+            try { chrome.sidePanel.open({ tabId: tabs[0].id }); } catch (e) {}
+            return;
+          }
+          // open sidebar and start investigation
+          try { chrome.sidePanel.open({ tabId: tabs[0].id }); } catch (e) {}
+          investigate(text, tabs[0].id, function (result) {
+            if (result && result.verdict) {
+              broadcastToSidebar({ type: 'page-investigation', ioc: text, result: result }, tabs[0].id);
+            }
+          });
+        });
+      }
+    });
+  } else if (cmd === 'scan-page') {
+    chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+      if (tabs && tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'scan-page' }, function () {
+          if (chrome.runtime.lastError) { /* tab may not have content script */ }
+        });
+      }
+    });
+  }
+});
+
 chrome.contextMenus.onClicked.addListener(function (info, tab) {
   if (!info.selectionText || !tab) return;
   var text = info.selectionText.trim().split(/\s+/)[0];
   if (!isValidIoc(text)) return;
-  investigate(text, tab.id, function () {});
+  if (info.menuItemId === 'block-ioc') {
+    blockIoc(text, function () {});
+  } else {
+    investigate(text, tab.id, function () {});
+  }
 });
 
 chrome.tabs.onUpdated.addListener(function (tabId, changeInfo) {
@@ -66,7 +117,7 @@ chrome.runtime.onMessage.addListener(function (msg, sender, respond) {
         if (sender.tab) chrome.sidePanel.open({ tabId: sender.tab.id });
       } catch (e) {}
       investigate(msg.ioc, sender.tab ? sender.tab.id : null, function (result) {
-        if (result && result.verdict) broadcastToSidebar({ type: 'page-investigation', ioc: msg.ioc, result: result });
+        if (result && result.verdict) broadcastToSidebar({ type: 'page-investigation', ioc: msg.ioc, result: result }, sender.tab ? sender.tab.id : undefined);
         respond(result);
       });
       return true;
@@ -76,10 +127,11 @@ chrome.runtime.onMessage.addListener(function (msg, sender, respond) {
     case 'investigation-result':
       if (sender.tab) {
         try {
-          chrome.tabs.sendMessage(sender.tab.id, msg, function (response) {
-            var err = chrome.runtime.lastError;
+          chrome.tabs.sendMessage(sender.tab.id, msg, function () {
+            if (chrome.runtime.lastError) { /* tab may have navigated away */ }
           });
         } catch (e) {}
+
       }
       respond({ ok: true });
       break;
@@ -130,14 +182,20 @@ chrome.runtime.onMessage.addListener(function (msg, sender, respond) {
 chrome.runtime.onConnect.addListener(function (port) {
   if (port.name === 'sidebar') {
     sidebarPorts.push(port);
+    port.onMessage.addListener(function (msg) {
+      if (msg.type === 'tab-id') {
+        port._tabId = msg.tabId;
+      }
+    });
     port.onDisconnect.addListener(function () {
       sidebarPorts = sidebarPorts.filter(function (p) { return p !== port; });
     });
   }
 });
 
-function broadcastToSidebar(msg) {
+function broadcastToSidebar(msg, tabId) {
   sidebarPorts.forEach(function (p) {
+    if (tabId && p._tabId && p._tabId !== tabId) return;
     try { p.postMessage(msg); } catch (e) {}
   });
 }
@@ -145,8 +203,12 @@ function broadcastToSidebar(msg) {
 function recordDetection(ioc, type, severity) {
   var key = (ioc || '').toLowerCase().trim();
   if (seenIocs.has(key)) return;
+  // FIFO cap to prevent memory leaks (avoids nuking entire set)
+  if (seenIocs.size >= 10000) {
+    var first = seenIocs.values().next().value;
+    if (first) seenIocs.delete(first);
+  }
   seenIocs.add(key);
-  if (seenIocs.size > 10000) seenIocs.clear();
 
   rtStats.totalDetections++;
   var sev = (severity || 'unknown').toUpperCase();
@@ -200,6 +262,9 @@ function investigate(ioc, tabId, callback) {
   var key = ioc.toLowerCase().trim();
   if (invCache.has(key)) {
     var cached = invCache.get(key);
+    // LRU: re-insert to move to end of Map
+    invCache.delete(key);
+    invCache.set(key, cached);
     if (tabId) sendVerdictToTab(tabId, ioc, cached);
     if (callback) callback(cached);
     return;
@@ -243,8 +308,10 @@ function sendVerdictToTab(tabId, ioc, result) {
       verdict: result.verdict,
       campaign: result.campaign,
       summary: result.summary
-    }, function (resp) {
-      var err = chrome.runtime.lastError;
+    }, function () {
+      if (chrome.runtime.lastError) {
+        // suppress expected error when tab no longer has content script injected
+      }
     });
   } catch (e) {}
 }
@@ -289,7 +356,6 @@ function markTabMalicious(tabId, severity) {
   var text = '!';
   if (severity === 'CRITICAL') { color = '#b91c2a'; text = '!!!'; }
   else if (severity === 'HIGH') { color = '#b45309'; text = '!!'; }
-  else if (severity === 'MEDIUM') { color = '#b45309'; text = '!'; }
   else { color = '#9ca3af'; text = '?'; }
   try {
     chrome.action.setBadgeBackgroundColor({ tabId: tabId, color: color });
@@ -306,7 +372,7 @@ function clearBadge(tabId) {
 function notify(title, message) {
   try {
     chrome.notifications.create({
-      type: 'basic', iconUrl: 'icons/icon128.png',
+      type: 'basic', iconUrl: 'icons/brand-icon.png',
       title: title, message: message, priority: 1
     });
   } catch (e) {}
@@ -326,9 +392,16 @@ function isValidIoc(str) {
   if (!str || typeof str !== 'string') return false;
   var s = str.trim();
   if (!s || s.length < 4 || s.length > 255) return false;
-  IOC_RE.combined.lastIndex = 0;
-  var m = IOC_RE.combined.exec(s);
-  if (m && m[0] === s) return true;
-  IOC_RE.combined.lastIndex = 0;
+  // Use individual patterns for reliable full-match validation
+  IOC_RE.ipv4.lastIndex = 0;
+  if (IOC_RE.ipv4.exec(s) && s === RegExp.lastMatch) return true;
+  IOC_RE.sha256.lastIndex = 0;
+  if (IOC_RE.sha256.exec(s) && s === RegExp.lastMatch) return true;
+  IOC_RE.md5.lastIndex = 0;
+  if (IOC_RE.md5.exec(s) && s === RegExp.lastMatch) return true;
+  IOC_RE.sha1.lastIndex = 0;
+  if (IOC_RE.sha1.exec(s) && s === RegExp.lastMatch) return true;
+  IOC_RE.domain.lastIndex = 0;
+  if (IOC_RE.domain.exec(s) && s === RegExp.lastMatch) return true;
   return false;
 }

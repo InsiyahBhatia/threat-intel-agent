@@ -49,32 +49,65 @@ def _same_subnet_ips(ip: str) -> list[tuple[str, str]]:
     return candidates
 
 
-def _passive_dns_domains(ip: str) -> list[tuple[str, str]]:
-    suffix = ip.replace(".", "-")
-    return [
-        (f"proxy-{suffix}.cc", "passive_dns"),
-        (f"c2-{suffix}.ru",    "passive_dns"),
-    ]
-
-
-def _passive_dns_ips(domain: str) -> list[tuple[str, str]]:
+def _dns_resolve_ips(domain: str) -> list[tuple[str, str]]:
+    """Resolve a domain to its A/AAAA records via real DNS."""
+    import socket
     domain = _clean_domain(domain)
-    seed = sum(ord(c) for c in domain) % 250 + 1
-    return [
-        (f"198.51.100.{seed}",                    "passive_dns"),
-        (f"198.51.100.{(seed + 1) % 254 or 1}",  "passive_dns"),
-    ]
+    results: list[tuple[str, str]] = []
+    try:
+        addrs = socket.getaddrinfo(domain, None)
+        seen = set()
+        for addr in addrs:
+            ip = addr[4][0]
+            if ip not in seen:
+                seen.add(ip)
+                results.append((ip, "resolved_ip"))
+    except Exception:
+        pass
+    return results
+
+
+def _reverse_dns_lookup(ip: str) -> list[tuple[str, str]]:
+    """Reverse DNS lookup using socket."""
+    import socket
+    results: list[tuple[str, str]] = []
+    try:
+        hostname, _, _ = socket.gethostbyaddr(ip)
+        if hostname and hostname != ip:
+            results.append((hostname, "reverse_dns"))
+    except Exception:
+        pass
+    return results
+
+
+def _crt_sh_domains(ip_or_domain: str) -> list[tuple[str, str]]:
+    """Query crt.sh certificate transparency logs for associated domains."""
+    results: list[tuple[str, str]] = []
+    try:
+        import urllib.request, json
+        url = f"https://crt.sh/?q={ip_or_domain}&output=json"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        seen = set()
+        for entry in data[:30]:
+            name = entry.get("name_value", "")
+            for part in name.split("\n"):
+                part = part.strip().lower().lstrip("*.")
+                if part and part not in seen and part != ip_or_domain:
+                    seen.add(part)
+                    results.append((part, "certificate_transparency"))
+    except Exception:
+        pass
+    return results
 
 
 def _sibling_domains(domain: str) -> list[tuple[str, str]]:
     domain = _clean_domain(domain)
-    root = ".".join(domain.split(".")[-2:])
-    return [
-        (f"www.{root}",   "sibling_domain"),
-        (f"admin.{root}", "sibling_domain"),
-        (f"cdn.{root}",   "sibling_domain"),
-        (f"mail.{root}",  "sibling_domain"),
-    ]
+    parts = domain.split(".")
+    if len(parts) < 2:
+        return []
+    return _crt_sh_domains("." + ".".join(parts[-2:]))
 
 
 def _dropped_hashes(domain: str) -> list[tuple[str, str]]:
@@ -85,23 +118,20 @@ def _dropped_hashes(domain: str) -> list[tuple[str, str]]:
     ]
 
 
-def _c2_for_hash(ioc: str) -> list[tuple[str, str]]:
-    digest = hashlib.sha256(ioc.encode()).hexdigest()[:8]
-    octet  = int(ioc[:2], 16) % 254 + 1
-    return [
-        (f"c2-{digest}.malware.cc", "c2_domain"),
-        (f"198.51.100.{octet}",     "c2_ip"),
-    ]
-
-
 def _pivot(ioc: str, ioc_type: str) -> list[tuple[str, str]]:
     """Return a list of (related_ioc, relationship) based on the IOC type."""
     if ioc_type == "ip":
-        return _same_subnet_ips(ioc) + _passive_dns_domains(ioc)
+        results = _same_subnet_ips(ioc)
+        results += _reverse_dns_lookup(ioc)
+        results += _crt_sh_domains(ioc)
+        return results
     if ioc_type == "domain":
-        return _passive_dns_ips(ioc) + _sibling_domains(ioc) + _dropped_hashes(ioc)
+        results = _dns_resolve_ips(ioc)
+        results += _sibling_domains(ioc)
+        results += _dropped_hashes(ioc)
+        return results
     if ioc_type == "hash":
-        return _c2_for_hash(ioc)
+        return _dropped_hashes(ioc)[:1]
     return []
 
 
