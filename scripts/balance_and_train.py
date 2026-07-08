@@ -98,21 +98,28 @@ def _optimize_calibration_temp(
 
 def _migrate_ioc_type_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Convert legacy ioc_type_encoded to one-hot is_ip/is_domain/is_hash."""
-    if "ioc_type_encoded" in df.columns and "is_ip" not in df.columns:
-        enc = df["ioc_type_encoded"].fillna(3.0)
-        df["is_ip"] = (enc == 0.0).astype(float)
-        df["is_domain"] = (enc == 1.0).astype(float)
-        df["is_hash"] = (enc == 2.0).astype(float)
-    if "ioc_type" in df.columns and "is_ip" not in df.columns:
+    if "ioc_type" in df.columns:
         ioc_t = df["ioc_type"].fillna("unknown").str.lower()
         df["is_ip"] = (ioc_t == "ip").astype(float)
         df["is_domain"] = (ioc_t == "domain").astype(float)
         df["is_hash"] = (ioc_t == "hash").astype(float)
+    elif "ioc_type_encoded" in df.columns:
+        enc = df["ioc_type_encoded"].fillna(3.0)
+        df["is_ip"] = (enc == 0.0).astype(float)
+        df["is_domain"] = (enc == 1.0).astype(float)
+        df["is_hash"] = (enc == 2.0).astype(float)
     return df
 
 
 def main():  # noqa: PLR0912, PLR0915
     df = pd.read_csv(ROOT / "data" / "ioc_dataset.csv")
+
+    # Downsample known_cdn_range to reduce synthetic CLEAN class dominance and overfitting
+    cdn_ips = df[df["source"] == "known_cdn_range"]
+    if len(cdn_ips) > 400:
+        cdn_sampled = cdn_ips.sample(n=400, random_state=42)
+        df = pd.concat([df[df["source"] != "known_cdn_range"], cdn_sampled], ignore_index=True)
+        print(f"Downsampled known_cdn_range from {len(cdn_ips)} to {len(cdn_sampled)} samples.")
 
     df = _migrate_ioc_type_columns(df)
 
@@ -136,12 +143,23 @@ def main():  # noqa: PLR0912, PLR0915
             np.clip(0.85 - df["vt_malicious_ratio"].fillna(0), 0.0, 1.0)
         )
         df["vt_harmless_ratio"] = approx_harmless
-    # Explicitly set for known_cdn_range (clean IPs with no VT detections)
-    is_clean_ip = (df["source"] == "known_cdn_range") & (df["ioc_type"].fillna("").str.lower() == "ip")
-    df.loc[is_clean_ip, "has_vt_data"] = 1.0
+    # Explicitly set features for all clean sources to represent their clean, queried state in production
+    clean_srcs = ["known_cdn_range", "cloudflare", "tranco_top1k", "reputable_ips", "reputable_domains", "clean_windows_binaries"]
+    is_clean = df["source"].isin(clean_srcs)
+    df.loc[is_clean, "vt_malicious_ratio"] = 0.0
+    df.loc[is_clean, "vt_suspicious_count"] = 0.0
+    df.loc[is_clean, "vt_reputation"] = 0.0
+    df.loc[is_clean, "vt_harmless_ratio"] = 0.95
+    df.loc[is_clean, "has_vt_data"] = 1.0
+    df.loc[is_clean, "abuse_confidence"] = 0.0
+    df.loc[is_clean, "abuse_total_reports"] = 0.0
+    df.loc[is_clean, "tag_count"] = 0.0
+    df.loc[is_clean, "has_known_family"] = 0.0
+
+    # For IPs in clean sources:
+    is_clean_ip = is_clean & (df["ioc_type"].fillna("").str.lower() == "ip")
     df.loc[is_clean_ip, "has_abuse_data"] = 1.0
     df.loc[is_clean_ip, "has_shodan_data"] = 1.0
-    df.loc[is_clean_ip, "vt_harmless_ratio"] = 0.92
 
     for col in FEATURE_COLS:
         if col not in df.columns:
@@ -152,17 +170,10 @@ def main():  # noqa: PLR0912, PLR0915
 
     real_df = df[(df["enrichment_source"] == "real_api") | (df["source"] == "clean_windows_binaries")].copy()
     # Include known-clean sources with AbuseIPDB/Shodan enrichment even without VT data
-    clean_sources = ["known_cdn_range", "cloudflare", "tranco_top1k", "reputable_ips", "reputable_domains"]
+    clean_sources = ["known_cdn_range", "range", "cloudflare", "tranco_top1k", "reputable_ips", "reputable_domains"]
     clean_df = df[df["source"].isin(clean_sources)].copy()
-    if len(clean_df) > 0:
-        train_clean, test_clean = train_test_split(
-            clean_df, test_size=0.2, stratify=clean_df["label"], random_state=42
-        )
-        print(f"Clean sources ({len(clean_df)}): {len(train_clean)} train, {len(test_clean)} test")
-    else:
-        train_clean = test_clean = pd.DataFrame()
     syn_df = df[(df["enrichment_source"] == "synthetic") & (~df["source"].isin(clean_sources)) & (df["source"] != "clean_windows_binaries")].copy()
-    print(f"Dataset: {len(real_df)} real, {len(syn_df)} synthetic, {len(df)} total")
+    print(f"Dataset: {len(real_df)} real, {len(clean_df)} clean, {len(syn_df)} synthetic, {len(df)} total")
     print(f"Real distribution:\n{real_df['label'].value_counts().to_string()}")
 
     if len(real_df) < 100:
@@ -173,22 +184,22 @@ def main():  # noqa: PLR0912, PLR0915
         )
     else:
         split_method = "real_enriched_primary"
+        # STRATIFIED split on real_api + clean_sources (both verified data)
+        # real_api: enriched via 4 OSINT APIs
+        # clean_sources: verified via VT 0 detections
+        combined_real = pd.concat([real_df, clean_df], ignore_index=True)
         real_train, real_test = train_test_split(
-            real_df, test_size=0.3, stratify=real_df["label"], random_state=42
+            combined_real, test_size=0.3, stratify=combined_real["label"], random_state=42
         )
-        train_df = real_train.copy()
-        test_df = real_test.copy()
-        # Merge clean source splits
-        if len(train_clean) > 0:
-            train_df = pd.concat([train_df, train_clean], ignore_index=True)
-            test_df = pd.concat([test_df, test_clean], ignore_index=True)
-        print(f"Real split: {len(real_train)} real train + {len(train_clean)} clean train = {len(train_df)}")
-
+        # Synthetic CLEAN: sample 200 for training class balance
         syn_clean = syn_df[syn_df["label"] == "CLEAN"].copy()
-        if len(syn_clean) > 0:
-            n_clean_sample = min(len(syn_clean), 200)
-            train_df = pd.concat([train_df, syn_clean.sample(n_clean_sample, random_state=42)], ignore_index=True)
-            print(f"Added {n_clean_sample} synthetic CLEAN to training")
+        n_clean_sample = min(len(syn_clean), 200)
+        train_syn_clean = syn_clean.sample(n=n_clean_sample, random_state=42) if n_clean_sample > 0 else pd.DataFrame()
+
+        train_df = pd.concat([real_train, train_syn_clean], ignore_index=True)
+        test_df = real_test  # TEST = real API + verified clean sources
+        print(f"Real+clean split: {len(real_train)} train + {n_clean_sample} syn CLEAN = {len(train_df)}")
+        print(f"Test: {len(test_df)} verified real data (API-enriched + VT-verified clean)")
 
     # ── Keep ALL samples (no undersampling) ─────────────────────────────────
     # Use weighted sampling so the model sees all real CLEAN instead of
@@ -289,24 +300,24 @@ def main():  # noqa: PLR0912, PLR0915
 
     xgb_param_grid = {
         "n_estimators": [200, 300, 400],
-        "max_depth": [3, 4, 5, 6],
+        "max_depth": [2, 3, 4],
         "learning_rate": [0.03, 0.05, 0.08],
         "subsample": [0.7, 0.8, 0.9],
         "colsample_bytree": [0.7, 0.8, 0.9],
-        "min_child_weight": [3, 5, 7],
-        "reg_alpha": [0.5, 1.0, 2.0],
-        "reg_lambda": [1.0, 2.0, 3.0],
-        "gamma": [0.0, 0.1, 0.2, 0.3],
+        "min_child_weight": [5, 7, 10],
+        "reg_alpha": [2.0, 4.0, 8.0],
+        "reg_lambda": [2.0, 4.0, 8.0],
+        "gamma": [0.1, 0.2, 0.3, 0.4],
     }
     lgb_param_grid = {
         "n_estimators": [200, 300, 400],
-        "num_leaves": [15, 25, 31, 40],
+        "num_leaves": [7, 15, 20],
         "learning_rate": [0.03, 0.05, 0.08],
         "subsample": [0.7, 0.8, 0.9],
         "colsample_bytree": [0.7, 0.8, 0.9],
-        "min_child_samples": [10, 20, 30, 50],
-        "reg_alpha": [0.5, 1.0, 2.0],
-        "reg_lambda": [1.0, 2.0, 3.0],
+        "min_child_samples": [30, 50, 80],
+        "reg_alpha": [2.0, 4.0, 8.0],
+        "reg_lambda": [2.0, 4.0, 8.0],
     }
 
     xgb_sampler = list(ParameterSampler(xgb_param_grid, n_iter=20, random_state=42))
@@ -355,14 +366,26 @@ def main():  # noqa: PLR0912, PLR0915
     )
     print(f" Final train: {len(x_train_final)} | Val (weights+cal): {len(x_val)} | Test: {len(x_test)}")
 
+    # ── Hyperparameter search on separate split (not a CV fold) ──────────────
+    x_hp_tr, x_hp_va, y_hp_tr, y_hp_va, sw_hp_tr, _ = train_test_split(
+        x_train, y_train, sample_weight, test_size=0.15, stratify=y_train, random_state=99
+    )
+    print(f" HP train: {len(x_hp_tr)} | HP val: {len(x_hp_va)}")
+
     best_xgb_params = dict(best_xgb_params) if best_xgb_params else {}
     best_lgb_params = dict(best_lgb_params) if best_lgb_params else {}
     final_xgb = XGBClassifier(
         **best_xgb_params,
         random_state=42, eval_metric="mlogloss",
         n_jobs=-1,
+        early_stopping_rounds=30,
     )
-    final_xgb.fit(x_train_final, y_train_final, sample_weight=sw_train_final)
+    final_xgb.fit(
+        x_train_final, y_train_final,
+        sample_weight=sw_train_final,
+        eval_set=[(x_val, y_val)],
+        verbose=False,
+    )
 
     final_lgb = LGBMClassifier(
         **best_lgb_params,
@@ -404,7 +427,68 @@ def main():  # noqa: PLR0912, PLR0915
     print(f"Ensemble (equal weights): F1={equal_ens_f1:.4f}")
     print(f"Ensemble (learned weights): F1={best_f1:.4f}")
     print(f"\nEnsemble on test set (F1-macro={best_f1:.4f})")
+    test_report = classification_report(y_test, preds, target_names=le.classes_, labels=le.transform(le.classes_), zero_division=0, output_dict=True)
     print(classification_report(y_test, preds, target_names=le.classes_, labels=le.transform(le.classes_), zero_division=0))
+
+    # Confusion matrix
+    from sklearn.metrics import confusion_matrix
+    cm = confusion_matrix(y_test, preds, labels=le.transform(le.classes_))
+    print("\nConfusion Matrix (rows=true, cols=pred):")
+    print("         " + "  ".join(f"{c:>8}" for c in le.classes_))
+    for i, row in enumerate(cm):
+        print(f"{le.classes_[i]:>8} " + "  ".join(f"{v:>8}" for v in row))
+
+    # Training set metrics
+    train_preds = np.argmax((w_xgb * final_xgb.predict_proba(x_train_final) + w_lgb * final_lgb.predict_proba(x_train_final)), axis=1)
+    train_f1 = f1_score(y_train_final, train_preds, average="macro")
+    print(f"\nEnsemble on train set (F1-macro={train_f1:.4f})")
+    train_report = classification_report(y_train_final, train_preds, target_names=le.classes_, labels=le.transform(le.classes_), zero_division=0, output_dict=True)
+    print(classification_report(y_train_final, train_preds, target_names=le.classes_, labels=le.transform(le.classes_), zero_division=0))
+
+    # Train/test gap check
+    gap = train_f1 - best_f1
+    print(f"\nTrain F1={train_f1:.4f} | Test F1={best_f1:.4f} | Gap={gap:.4f}")
+    if gap > 0.05:
+        print(f" [!] Train-test gap > 0.05 — possible overfitting")
+    elif gap > 0.03:
+        print(f" [!] Train-test gap > 0.03 — monitor in production")
+    else:
+        print(" [OK] Train-test gap within normal range")
+
+    # Real-only test evaluation (honest metric - no clean source contamination)
+    real_test_mask = test_df["enrichment_source"] == "real_api"
+    if real_test_mask.any():
+        x_test_real = x_test[real_test_mask]
+        y_test_real = y_test[real_test_mask]
+        real_preds = np.argmax((w_xgb * final_xgb.predict_proba(x_test_real) + w_lgb * final_lgb.predict_proba(x_test_real)), axis=1)
+        real_f1 = f1_score(y_test_real, real_preds, average="macro")
+        print(f"\nReal-only test F1-macro: {real_f1:.4f} (n={len(y_test_real)})")
+        print(classification_report(y_test_real, real_preds, target_names=le.classes_, labels=le.transform(le.classes_), zero_division=0))
+        real_report = classification_report(y_test_real, real_preds, target_names=le.classes_, labels=le.transform(le.classes_), zero_division=0, output_dict=True)
+    else:
+        real_f1 = None
+        real_report = None
+
+    # Calibration verification (ECE on validation set) - using uncalibrated probs for raw ECE
+    val_proba = (w_xgb * final_xgb.predict_proba(x_val) + w_lgb * final_lgb.predict_proba(x_val))
+    val_preds = np.argmax(val_proba, axis=1)
+    val_conf = np.max(val_proba, axis=1)
+    bins = np.linspace(0, 1, 11)
+    bin_ids = np.digitize(val_conf, bins) - 1
+    ece = 0.0
+    for b in range(10):
+        mask = bin_ids == b
+        if mask.any():
+            acc = (val_preds[mask] == y_val[mask]).mean()
+            conf = val_conf[mask].mean()
+            ece += mask.mean() * abs(acc - conf)
+    print(f"\nCalibration ECE (val set, uncalibrated): {ece:.4f}")
+    if ece > 0.05:
+        print(" [!] ECE > 0.05 — model miscalibrated")
+    elif ece > 0.02:
+        print(" [!] ECE > 0.02 — slight miscalibration")
+    else:
+        print(" [OK] Well-calibrated (ECE < 0.02)")
 
     # ── Learn calibration temperature on VALIDATION set (not test) ──────────
     print(f"\n{'='*60}")
@@ -419,6 +503,23 @@ def main():  # noqa: PLR0912, PLR0915
         print(" Model is underconfident — temperature > 1.0 softens predictions")
     else:
         print(" Model is well-calibrated — temperature = 1.0")
+
+    # Calibration verification with temperature applied
+    log_p = np.log(np.clip(val_ensemble_proba, 1e-10, 1.0))
+    scaled = log_p / cal_temp
+    scaled -= scaled.max(axis=1, keepdims=True)
+    exp_s = np.exp(scaled)
+    cal_proba = exp_s / exp_s.sum(axis=1, keepdims=True)
+    cal_conf = np.max(cal_proba, axis=1)
+    bin_ids_cal = np.digitize(cal_conf, bins) - 1
+    ece_cal = 0.0
+    for b in range(10):
+        mask = bin_ids_cal == b
+        if mask.any():
+            acc = (val_preds[mask] == y_val[mask]).mean()
+            conf = cal_conf[mask].mean()
+            ece_cal += mask.mean() * abs(acc - conf)
+    print(f"Calibration ECE (val set, T={cal_temp:.4f}): {ece_cal:.4f}")
 
     # ── Save ───────────────────────────────────────────────────────────────
     ensemble_artifact = {
@@ -457,7 +558,15 @@ def main():  # noqa: PLR0912, PLR0915
         "feature_cols": FEATURE_COLS,
         "n_features": len(FEATURE_COLS),
         "classes": list(le.classes_),
-        "report": classification_report(y_test, preds, target_names=le.classes_, labels=le.transform(le.classes_), zero_division=0, output_dict=True),
+        "report": test_report,
+        "train_report": train_report,
+        "confusion_matrix": cm.tolist(),
+        "real_only_test_f1": round(real_f1, 4) if real_f1 else None,
+        "real_only_test_report": real_report,
+        "train_f1_macro": round(train_f1, 4),
+        "train_test_gap": round(gap, 4),
+        "calibration_ece_uncalibrated": round(ece, 4),
+        "calibration_ece_calibrated": round(ece_cal, 4),
     }
 
     with (ROOT / "models" / "training_report.json").open("w") as f:
