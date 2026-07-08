@@ -1,35 +1,35 @@
 {
   "learning_curve": {
-    "gap": 0.14607019588947612,
-    "train_loss": 0.26397435171108324,
-    "val_loss": 0.41004454760055936
+    "gap": 0.15343243099388054,
+    "train_loss": 0.2565174933934214,
+    "val_loss": 0.40994992438730193
   },
   "cross_validation": {
-    "mean_f1": 0.7836422844328147,
-    "std_f1": 0.018877072269717066,
+    "mean_f1": 0.7799852760952628,
+    "std_f1": 0.014974642242585158,
     "fold_f1s": [
-      0.7631,
-      0.8039,
-      0.7619,
-      0.8055,
-      0.7838
+      0.7617,
+      0.7942,
+      0.7638,
+      0.7978,
+      0.7825
     ]
   },
   "imbalanced_test": {
-    "f1_macro": 0.7872
+    "f1_macro": 0.7839
   },
   "feature_importance": {
     "top10_gain": {
-      "malicious_family": 0.43309998512268066,
-      "abuse_confidence": 0.120899997651577,
-      "abuse_distinct_users": 0.06310000270605087,
-      "is_hash": 0.05270000174641609,
-      "vt_malicious_ratio": 0.03700000047683716,
-      "threat_signal_sum": 0.03280000016093254,
-      "vt_reputation": 0.029100000858306885,
-      "abuse_total_reports": 0.02500000037252903,
-      "has_known_family": 0.023000000044703484,
-      "tor_reputation_risk": 0.02250000089406967
+      "has_known_family": 0.19599999487400055,
+      "abuse_confidence": 0.1551000028848648,
+      "abuse_distinct_users": 0.0820000022649765,
+      "vt_malicious_ratio": 0.08110000193119049,
+      "has_malicious_vt_tags": 0.07209999859333038,
+      "is_hash": 0.06319999694824219,
+      "threat_signal_sum": 0.03779999911785126,
+      "vt_reputation": 0.0357000008225441,
+      "tor_reputation_risk": 0.033799998462200165,
+      "abuse_total_reports": 0.03139999881386757
     }
   },
   "temporal_split": {

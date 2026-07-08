@@ -49,7 +49,6 @@ _DERIVED_COLS: list[str] = [
     "port_attack_surface",
     "cve_per_port",
     "reports_per_user",
-    "malicious_family",
     "tor_reputation_risk",
     "otx_vt_corroboration",
     "shodan_exposure_score",
@@ -73,7 +72,7 @@ def _sigmoid(x: float) -> float:
     return ey / (1.0 + ey)
 
 
-def extract_ml_features(
+def extract_ml_features(  # noqa: PLR0915
     ioc_type: str,
     vt_raw: dict | None = None,
     abuse_raw: dict | None = None,
@@ -132,9 +131,9 @@ def extract_ml_features(
     vt_harmless_ratio = float(harmless / total_engines) if total_engines > 1 else 0.0
 
     # Check VT + Shodan tags for malicious keywords (works for all IOC types)
-    _MALICIOUS_TAG_KEYWORDS = {"malware", "c2", "c&c", "command and control", "trojan", "ransomware", "botnet", "phishing", "malicious", "dropper", "loader", "backdoor", "spyware", "worm", "exploit", "rat", "infostealer"}
+    _malicious_tag_keywords = {"malware", "c2", "c&c", "command and control", "trojan", "ransomware", "botnet", "phishing", "malicious", "dropper", "loader", "backdoor", "spyware", "worm", "exploit", "rat", "infostealer"}
     all_tags = [t.lower() for t in tags] + [t.lower() for t in sh.get("tags", [])]
-    has_malicious_vt_tags = 1.0 if any(kw in t for t in all_tags for kw in _MALICIOUS_TAG_KEYWORDS) else 0.0
+    has_malicious_vt_tags = 1.0 if any(kw in t for t in all_tags for kw in _malicious_tag_keywords) else 0.0
 
     # ── Derived interaction/ratio features ──────────────────────────────────
 
@@ -165,8 +164,6 @@ def extract_ml_features(
         reports_per_user = min(_sigmoid((abuse_total_reports / abuse_distinct_users) / 10.0), 1.0)
     else:
         reports_per_user = 0.0
-
-    malicious_family = vt_malicious_ratio * has_known_family
 
     tor_reputation_risk = is_tor * _sigmoid(-vt_reputation / 30.0)
 
@@ -206,7 +203,6 @@ def extract_ml_features(
         "port_attack_surface": round(port_attack_surface, 6),
         "cve_per_port": round(cve_per_port, 6),
         "reports_per_user": round(reports_per_user, 6),
-        "malicious_family": round(malicious_family, 6),
         "tor_reputation_risk": round(tor_reputation_risk, 6),
         "otx_vt_corroboration": round(otx_vt_corroboration, 6),
         "shodan_exposure_score": round(shodan_exposure_score, 6),

@@ -86,7 +86,8 @@
         reportBatch.push({ ioc: matches[m].value, typeLabel: matches[m].type });
       }
     }
-    flushReports();
+    clearTimeout(reportTimer);
+    reportTimer = setTimeout(flushReports, 500);
 
     var frag = document.createDocumentFragment();
     var last = 0;
@@ -283,17 +284,13 @@
   }, { passive: true });
   init();
 
+  function escapeCSS(str) { return str ? String(str).replace(/[\\"\]']/g, '\\$&') : ''; }
+
   function flushReports() {
     if (reportBatch.length === 0) return;
-    var batch = reportBatch.splice(0); // clear the batch
+    var batch = reportBatch.splice(0);
     try {
-      // send each IOC individually since the background listener expects single items
-      batch.forEach(function (item) {
-        chrome.runtime.sendMessage({ type: 'ioc-detected', ioc: item.ioc, typeLabel: item.typeLabel, severity: null }).catch(function () {});
-      });
+      chrome.runtime.sendMessage({ type: 'ioc-batch-detected', batch: batch }).catch(function () {});
     } catch (e) {}
   }
-
-  function escapeCSS(str) { return str ? String(str).replace(/"/g, '\\"') : ''; }
-  function esc(s) { return s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 })();

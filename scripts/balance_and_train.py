@@ -8,27 +8,24 @@
 - Uses shared synthetic data generator from utils.synthetic_data
 """
 
-import os
-import sys
 import json
+import sys
+from pathlib import Path
+
+import joblib
 import numpy as np
 import pandas as pd
-from pathlib import Path
+from lightgbm import LGBMClassifier
 from scipy.optimize import minimize
-from scipy.special import softmax
-import joblib
-from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import classification_report, f1_score
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.class_weight import compute_sample_weight
-from sklearn.isotonic import IsotonicRegression
 from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from utils.ml_features import FEATURE_COLS
-from utils.synthetic_data import assign_features_realistic
+from utils.ml_features import FEATURE_COLS  # noqa: E402
 
 N_FOLDS = 3
 
@@ -114,7 +111,7 @@ def _migrate_ioc_type_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def main():
+def main():  # noqa: PLR0912, PLR0915
     df = pd.read_csv(ROOT / "data" / "ioc_dataset.csv")
 
     df = _migrate_ioc_type_columns(df)
@@ -151,7 +148,7 @@ def main():
             df[col] = 0.0
     df[FEATURE_COLS] = df[FEATURE_COLS].fillna(0).astype("float64")
 
-    ALL_LABELS = ["CLEAN", "LOW", "HIGH", "CRITICAL"]
+    all_labels = ["CLEAN", "LOW", "HIGH", "CRITICAL"]
 
     real_df = df[(df["enrichment_source"] == "real_api") | (df["source"] == "clean_windows_binaries")].copy()
     # Include known-clean sources with AbuseIPDB/Shodan enrichment even without VT data
@@ -202,13 +199,13 @@ def main():
     real_in_train = sum(1 for _, r in train_balanced.iterrows() if r.get("enrichment_source") == "real_api")
     syn_in_train = sum(1 for _, r in train_balanced.iterrows() if r.get("enrichment_source") == "synthetic" or r.get("source") == "synthetic")
     print(f"Train: {real_in_train} real, {syn_in_train} synthetic")
-    print(f"\nTest distribution (real only):")
+    print("\nTest distribution (real only):")
     print(test_df["label"].value_counts())
 
-    X_train = train_balanced[FEATURE_COLS]
-    X_test = test_df[FEATURE_COLS].fillna(0)
+    x_train = train_balanced[FEATURE_COLS]
+    x_test = test_df[FEATURE_COLS].fillna(0)
     le = LabelEncoder()
-    le.fit(ALL_LABELS)
+    le.fit(all_labels)
     y_train = le.transform(train_balanced["label"])
     y_test = le.transform(test_df["label"].values)
 
@@ -219,8 +216,8 @@ def main():
     ).values.astype(float)
     sample_weight = sw_balanced * (1.0 + 2.0 * is_real)
 
-    print(f"\nTrain size: {len(X_train)}, Test size: {len(X_test)}")
-    print(f"Sample weight: real upweighted 3x, synthetic 1x (class-balanced)")
+    print(f"\nTrain size: {len(x_train)}, Test size: {len(x_test)}")
+    print("Sample weight: real upweighted 3x, synthetic 1x (class-balanced)")
 
     # ── 3-Fold Stratified CV ───────────────────────────────────────────────
     skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=42)
@@ -232,8 +229,8 @@ def main():
     lgb_fold_f1s = []
     ensemble_fold_f1s = []
 
-    for fold, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):
-        X_tr, X_va = X_train.iloc[train_idx], X_train.iloc[val_idx]
+    for fold, (train_idx, val_idx) in enumerate(skf.split(x_train, y_train)):
+        x_tr, x_va = x_train.iloc[train_idx], x_train.iloc[val_idx]
         y_tr, y_va = y_train[train_idx], y_train[val_idx]
         sw_tr = sample_weight[train_idx]
 
@@ -245,9 +242,9 @@ def main():
             random_state=42, eval_metric="mlogloss",
             n_jobs=-1, early_stopping_rounds=20,
         )
-        xgb.fit(X_tr, y_tr, sample_weight=sw_tr,
-                eval_set=[(X_va, y_va)], verbose=False)
-        xgb_preds = xgb.predict(X_va)
+        xgb.fit(x_tr, y_tr, sample_weight=sw_tr,
+                eval_set=[(x_va, y_va)], verbose=False)
+        xgb_preds = xgb.predict(x_va)
         xgb_f1 = f1_score(y_va, xgb_preds, average="macro")
         xgb_fold_f1s.append(xgb_f1)
 
@@ -258,13 +255,13 @@ def main():
             reg_alpha=2.0, reg_lambda=3.0,
             random_state=42, n_jobs=-1, verbose=-1,
         )
-        lgb.fit(X_tr, y_tr, sample_weight=sw_tr)
-        lgb_preds = lgb.predict(X_va)
+        lgb.fit(x_tr, y_tr, sample_weight=sw_tr)
+        lgb_preds = lgb.predict(x_va)
         lgb_f1 = f1_score(y_va, lgb_preds, average="macro")
         lgb_fold_f1s.append(lgb_f1)
 
-        xgb_proba = xgb.predict_proba(X_va)
-        lgb_proba = lgb.predict_proba(X_va)
+        xgb_proba = xgb.predict_proba(x_va)
+        lgb_proba = lgb.predict_proba(x_va)
         ensemble_proba = (xgb_proba + lgb_proba) / 2.0
         ensemble_preds = np.argmax(ensemble_proba, axis=1)
         ens_f1 = f1_score(y_va, ensemble_preds, average="macro")
@@ -316,48 +313,47 @@ def main():
     lgb_sampler = list(ParameterSampler(lgb_param_grid, n_iter=20, random_state=42))
 
     # Use first CV fold for HP search
-    hp_train_idx, hp_val_idx = next(skf.split(X_train, y_train))
-    X_hp_tr, X_hp_va = X_train.iloc[hp_train_idx], X_train.iloc[hp_val_idx]
+    hp_train_idx, hp_val_idx = next(skf.split(x_train, y_train))
+    x_hp_tr, x_hp_va = x_train.iloc[hp_train_idx], x_train.iloc[hp_val_idx]
     y_hp_tr, y_hp_va = y_train[hp_train_idx], y_train[hp_val_idx]
     sw_hp_tr = sample_weight[hp_train_idx]
 
     best_xgb_f1, best_xgb_params = -1.0, None
-    for i, params in enumerate(xgb_sampler):
+    for _, params in enumerate(xgb_sampler):
         m = XGBClassifier(
             **params,
             random_state=42, eval_metric="mlogloss",
             n_jobs=-1, early_stopping_rounds=30,
         )
-        m.fit(X_hp_tr, y_hp_tr, sample_weight=sw_hp_tr,
-              eval_set=[(X_hp_va, y_hp_va)], verbose=False)
-        f1 = f1_score(y_hp_va, m.predict(X_hp_va), average="macro")
+        m.fit(x_hp_tr, y_hp_tr, sample_weight=sw_hp_tr,
+              eval_set=[(x_hp_va, y_hp_va)], verbose=False)
+        f1 = f1_score(y_hp_va, m.predict(x_hp_va), average="macro")
         if f1 > best_xgb_f1:
             best_xgb_f1, best_xgb_params = f1, params
     print(f" Best XGB: F1={best_xgb_f1:.4f} | params={best_xgb_params}")
 
     best_lgb_f1, best_lgb_params = -1.0, None
-    for i, params in enumerate(lgb_sampler):
+    for _, params in enumerate(lgb_sampler):
         m = LGBMClassifier(
             **params,
             random_state=42, n_jobs=-1, verbose=-1,
         )
-        m.fit(X_hp_tr, y_hp_tr, sample_weight=sw_hp_tr)
-        f1 = f1_score(y_hp_va, m.predict(X_hp_va), average="macro")
+        m.fit(x_hp_tr, y_hp_tr, sample_weight=sw_hp_tr)
+        f1 = f1_score(y_hp_va, m.predict(x_hp_va), average="macro")
         if f1 > best_lgb_f1:
             best_lgb_f1, best_lgb_params = f1, params
     print(f" Best LGB: F1={best_lgb_f1:.4f} | params={best_lgb_params}")
 
     # ── Train final dual-model ensemble on full train set ──────────────────
     print(f"\n{'='*60}")
-    print(f"Training final dual-model ensemble on full train set ({len(X_train)} rows)...")
+    print(f"Training final dual-model ensemble on full train set ({len(x_train)} rows)...")
     print(f"{'='*60}")
-    sw_full = sample_weight
 
     # Hold out a validation set from training for ensemble weight + calibration learning
-    X_train_final, X_val, y_train_final, y_val, sw_train_final, sw_val = train_test_split(
-        X_train, y_train, sample_weight, test_size=0.15, stratify=y_train, random_state=42
+    x_train_final, x_val, y_train_final, y_val, sw_train_final, sw_val = train_test_split(
+        x_train, y_train, sample_weight, test_size=0.15, stratify=y_train, random_state=42
     )
-    print(f" Final train: {len(X_train_final)} | Val (weights+cal): {len(X_val)} | Test: {len(X_test)}")
+    print(f" Final train: {len(x_train_final)} | Val (weights+cal): {len(x_val)} | Test: {len(x_test)}")
 
     best_xgb_params = dict(best_xgb_params) if best_xgb_params else {}
     best_lgb_params = dict(best_lgb_params) if best_lgb_params else {}
@@ -366,16 +362,16 @@ def main():
         random_state=42, eval_metric="mlogloss",
         n_jobs=-1,
     )
-    final_xgb.fit(X_train_final, y_train_final, sample_weight=sw_train_final)
+    final_xgb.fit(x_train_final, y_train_final, sample_weight=sw_train_final)
 
     final_lgb = LGBMClassifier(
         **best_lgb_params,
         random_state=42, n_jobs=-1, verbose=-1,
     )
-    final_lgb.fit(X_train_final, y_train_final, sample_weight=sw_train_final)
+    final_lgb.fit(x_train_final, y_train_final, sample_weight=sw_train_final)
 
-    xgb_val_proba = final_xgb.predict_proba(X_val)
-    lgb_val_proba = final_lgb.predict_proba(X_val)
+    xgb_val_proba = final_xgb.predict_proba(x_val)
+    lgb_val_proba = final_lgb.predict_proba(x_val)
 
     # ── Learn ensemble weights on VALIDATION set (not test) ─────────────────
     print(f"\n{'='*60}")
@@ -388,14 +384,14 @@ def main():
     w_lgb = learned_weights["lgb"]
     print(f" Learned weights: XGB={w_xgb:.4f}, LGB={w_lgb:.4f}")
 
-    xgb_test_proba = final_xgb.predict_proba(X_test)
-    lgb_test_proba = final_lgb.predict_proba(X_test)
+    xgb_test_proba = final_xgb.predict_proba(x_test)
+    lgb_test_proba = final_lgb.predict_proba(x_test)
 
     ensemble_proba = (w_xgb * xgb_test_proba + w_lgb * lgb_test_proba)
     preds = np.argmax(ensemble_proba, axis=1)
 
-    xgb_solo_preds = final_xgb.predict(X_test)
-    lgb_solo_preds = final_lgb.predict(X_test)
+    xgb_solo_preds = final_xgb.predict(x_test)
+    lgb_solo_preds = final_lgb.predict(x_test)
     xgb_solo_f1 = f1_score(y_test, xgb_solo_preds, average="macro")
     lgb_solo_f1 = f1_score(y_test, lgb_solo_preds, average="macro")
     equal_ens_proba = (xgb_test_proba + lgb_test_proba) / 2.0
@@ -444,10 +440,10 @@ def main():
         "lgb_solo_f1": round(lgb_solo_f1, 4),
         "ensemble_weights": learned_weights,
         "calibration_temp": cal_temp,
-        "xgb_best_params": {k: int(v) if isinstance(v, (np.integer,)) else float(v) if isinstance(v, (np.floating,)) else v for k, v in best_xgb_params.items()},
-        "lgb_best_params": {k: int(v) if isinstance(v, (np.integer,)) else float(v) if isinstance(v, (np.floating,)) else v for k, v in best_lgb_params.items()},
-        "n_train": len(X_train),
-        "n_test": len(X_test),
+        "xgb_best_params": {k: int(v) if isinstance(v, np.integer) else float(v) if isinstance(v, np.floating) else v for k, v in best_xgb_params.items()},
+        "lgb_best_params": {k: int(v) if isinstance(v, np.integer) else float(v) if isinstance(v, np.floating) else v for k, v in best_lgb_params.items()},
+        "n_train": len(x_train),
+        "n_test": len(x_test),
         "xgb_cv_mean": round(xgb_mean, 4),
         "xgb_cv_std": round(xgb_std, 4),
         "lgb_cv_mean": round(lgb_mean, 4),
@@ -464,9 +460,9 @@ def main():
         "report": classification_report(y_test, preds, target_names=le.classes_, labels=le.transform(le.classes_), zero_division=0, output_dict=True),
     }
 
-    with open(ROOT / "models" / "training_report.json", "w") as f:
+    with (ROOT / "models" / "training_report.json").open("w") as f:
         json.dump(report, f, indent=2)
-    print(f"\nEnsemble model saved to models/severity_classifier.joblib")
+    print("\nEnsemble model saved to models/severity_classifier.joblib")
     print(f" Ensemble weights: {learned_weights}")
     print(f" Calibration temp: {cal_temp}")
 

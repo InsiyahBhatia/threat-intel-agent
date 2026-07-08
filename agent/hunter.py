@@ -17,17 +17,21 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import socket
+import urllib.request
 from collections import deque
-from typing import Callable, Awaitable
+from collections.abc import Awaitable, Callable
+from urllib.parse import quote, urlparse
 
-from utils.classifier import classify_ioc
+from agent.orchestrator import investigate
 from agent.threat_graph import IOCNode, ThreatGraph
+from utils.classifier import classify_ioc
 
 
 def _clean_domain(domain: str) -> str:
     domain = domain.strip().lower()
     if domain.startswith(("http://", "https://")):
-        from urllib.parse import urlparse
         domain = urlparse(domain).netloc or domain
     return domain.rstrip("/").strip()
 
@@ -51,7 +55,6 @@ def _same_subnet_ips(ip: str) -> list[tuple[str, str]]:
 
 def _dns_resolve_ips(domain: str) -> list[tuple[str, str]]:
     """Resolve a domain to its A/AAAA records via real DNS."""
-    import socket
     domain = _clean_domain(domain)
     results: list[tuple[str, str]] = []
     try:
@@ -69,7 +72,6 @@ def _dns_resolve_ips(domain: str) -> list[tuple[str, str]]:
 
 def _reverse_dns_lookup(ip: str) -> list[tuple[str, str]]:
     """Reverse DNS lookup using socket."""
-    import socket
     results: list[tuple[str, str]] = []
     try:
         hostname, _, _ = socket.gethostbyaddr(ip)
@@ -84,16 +86,15 @@ def _crt_sh_domains(ip_or_domain: str) -> list[tuple[str, str]]:
     """Query crt.sh certificate transparency logs for associated domains."""
     results: list[tuple[str, str]] = []
     try:
-        import urllib.request, json
-        url = f"https://crt.sh/?q={ip_or_domain}&output=json"
+        url = f"https://crt.sh/?q={quote(ip_or_domain, safe='')}&output=json"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
         seen = set()
         for entry in data[:30]:
             name = entry.get("name_value", "")
-            for part in name.split("\n"):
-                part = part.strip().lower().lstrip("*.")
+            for raw_part in name.split("\n"):
+                part = raw_part.strip().lower().lstrip("*.")
                 if part and part not in seen and part != ip_or_domain:
                     seen.add(part)
                     results.append((part, "certificate_transparency"))
@@ -137,7 +138,7 @@ def _pivot(ioc: str, ioc_type: str) -> list[tuple[str, str]]:
 
 ProgressCallback = Callable[[str, ThreatGraph], Awaitable[None]]
 
-_MALICIOUS = {"CRITICAL", "HIGH", "MEDIUM"}
+_MALICIOUS = {"CRITICAL", "HIGH"}
 
 
 async def hunt(
@@ -153,8 +154,6 @@ async def hunt(
     Yields live progress via `progress_callback(message, graph)`.
     Returns the completed ThreatGraph.
     """
-    from agent.orchestrator import investigate   # local import to avoid circulars
-
     graph = ThreatGraph()
     queue: deque[tuple[str, int]] = deque()
 
@@ -177,11 +176,10 @@ async def hunt(
 
         await _emit(f"Investigating [{depth}] {ioc} …")
 
-        # Investigate in a thread so the event loop stays free
         try:
-            result = await asyncio.to_thread(investigate, ioc)
+            result = await investigate(ioc)
         except Exception as exc:
-            await _emit(f"  ⚠ Error investigating {ioc}: {exc}")
+            await _emit(f"  Error investigating {ioc}: {exc}")
             node.investigated = True
             continue
 

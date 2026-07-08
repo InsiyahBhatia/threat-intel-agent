@@ -40,7 +40,7 @@ export default function HistoryTab({
 }) {
   const { palette: themePalette } = useTheme();
   const p = palette || themePalette;
-  const isIgnored = (ioc) => ignoredIocs?.includes(ioc);
+  const isIgnored = (ioc) => ignoredIocs?.some((x) => (typeof x === "string" ? x : x.ioc) === ioc);
 
   return (
     <motion.div
@@ -203,9 +203,10 @@ export default function HistoryTab({
 
       {selReport?.report && (
         <ReportPreview
-          report={selReport.report}
-          ioc={selReport.ioc}
-          severity={selReport.severity}
+          report={selReport}
+          onReRun={onReRun}
+          onIgnore={onIgnore}
+          ignoredIocs={ignoredIocs}
         />
       )}
     </motion.div>

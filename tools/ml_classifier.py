@@ -1,8 +1,8 @@
-"""ML Severity Classifier Tool — wraps trained models (XGBoost/LightGBM ensemble)
+"""ML Severity Classifier Tool — wraps trained models (x_dfGBoost/LightGBM ensemble)
 as both a LangChain @tool and direct Python callable.
 
 Tier 4 improvements:
-- Multi-model ensemble (XGB + LGB soft voting)
+- Multi-model ensemble (x_dfGB + LGB soft voting)
 - Learned ensemble weights (stored in model artifact, not hardcoded)
 - Temperature-scaled confidence calibration (learned on validation set)
 - Expanded 30-feature set with interaction/ratio features
@@ -13,9 +13,8 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import Optional
 
-from langchain_core.tools import tool
+from utils.decorators import tool
 
 ROOT = Path(__file__).resolve().parents[1]
 MODELS_DIR = ROOT / "models"
@@ -37,8 +36,8 @@ _CALIBRATION_TEMPERATURE: float = _DEFAULT_CALIBRATION_TEMP
 
 def _load_model() -> bool:
     """Lazy-load model artifacts. Returns True if successful."""
-    global _MODEL, _LE, _COLS, _LOAD_ERROR, _ENSEMBLE_MODELS
-    global _ENSEMBLE_WEIGHTS, _CALIBRATION_TEMPERATURE
+    global _MODEL, _LE, _COLS, _LOAD_ERROR, _ENSEMBLE_MODELS  # noqa: PLW0603
+    global _ENSEMBLE_WEIGHTS, _CALIBRATION_TEMPERATURE  # noqa: PLW0603
 
     if _MODEL is not None:
         return True
@@ -57,7 +56,6 @@ def _load_model() -> bool:
 
     try:
         import joblib
-        import numpy as np
 
         _LE = joblib.load(le_path)
         _COLS = joblib.load(cols_path)
@@ -88,7 +86,7 @@ def _calibrate_confidence(proba: float) -> float:
     return min(scaled, 1.0)
 
 
-def predict_ml_severity(features: dict) -> Optional[dict]:
+def predict_ml_severity(features: dict) -> dict | None:
     """
     Direct Python callable — ensemble prediction with calibration.
 
@@ -100,12 +98,12 @@ def predict_ml_severity(features: dict) -> Optional[dict]:
     Returns
     -------
     dict with keys:
-    severity str — CLEAN / LOW / HIGH / CRITICAL
-    confidence int — 0–100 (calibrated max probability x 100)
-    probabilities dict — {class_name: calibrated_probability, ...}
-    model_name str — "Ensemble(XGB+LGB)"
+    severity str - CLEAN / LOW / HIGH / CRITICAL
+    confidence int - 0-100 (calibrated max probability x 100)
+    probabilities dict - {class_name: calibrated_probability, ...}
+    model_name str - "Ensemble(x_dfGB+LGB)"
     feature_count int
-    ensemble_breakdown list — per-model predictions
+    ensemble_breakdown list - per-model predictions
     Returns None if the model is unavailable.
     """
     if not _load_model():
@@ -113,7 +111,7 @@ def predict_ml_severity(features: dict) -> Optional[dict]:
 
     import numpy as np
 
-    X = np.array([[features.get(c, 0.0) for c in _COLS]])
+    x_df = np.array([[features.get(c, 0.0) for c in _COLS]])
 
     if len(_ENSEMBLE_MODELS) > 1:
         n_classes = len(_LE.classes_)
@@ -129,7 +127,7 @@ def predict_ml_severity(features: dict) -> Optional[dict]:
         for name, model in _ENSEMBLE_MODELS:
             weight = _ENSEMBLE_WEIGHTS.get(name, 1.0 / len(_ENSEMBLE_MODELS))
             if hasattr(model, "predict_proba"):
-                proba = model.predict_proba(X)[0]
+                proba = model.predict_proba(x_df)[0]
                 if len(proba) < n_classes:
                     proba = np.pad(proba, (0, n_classes - len(proba)), constant_values=0)
                 elif len(proba) > n_classes:
@@ -137,7 +135,7 @@ def predict_ml_severity(features: dict) -> Optional[dict]:
                 combined_proba += weight * proba
                 pred_idx = np.argmax(proba)
                 pred_class = _LE.inverse_transform([pred_idx])[0]
-                per_model.append({"model": name, "prediction": pred_class, "confidence": int(round(max(proba) * 100))})
+                per_model.append({"model": name, "prediction": pred_class, "confidence": round(max(proba) * 100)})
                 model_names.append(name)
 
         combined_proba /= total_weight or 1.0
@@ -147,13 +145,13 @@ def predict_ml_severity(features: dict) -> Optional[dict]:
 
         model_name = f"Ensemble({'+'.join(model_names)})"
     else:
-        proba = _MODEL.predict_proba(X)[0]
-        pred_idx = _MODEL.predict(X)[0]
+        proba = _MODEL.predict_proba(x_df)[0]
+        pred_idx = _MODEL.predict(x_df)[0]
         pred_class = _LE.inverse_transform([pred_idx])[0]
         raw_confidence = max(proba)
         combined_proba = proba
         model_name = type(_MODEL).__name__
-        per_model = [{"model": model_name, "prediction": pred_class, "confidence": int(round(raw_confidence * 100))}]
+        per_model = [{"model": model_name, "prediction": pred_class, "confidence": round(raw_confidence * 100)}]
 
     # CRITICAL confidence floor: downgrade to next-highest if < 75%
     if pred_class == "CRITICAL" and raw_confidence < 0.75:
@@ -166,7 +164,7 @@ def predict_ml_severity(features: dict) -> Optional[dict]:
                 break
 
     calibrated_confidence = _calibrate_confidence(raw_confidence)
-    confidence = int(round(calibrated_confidence * 100))
+    confidence = round(calibrated_confidence * 100)
 
     probabilities = {
         cls: round(float(combined_proba[i]), 4)
@@ -191,7 +189,7 @@ def ml_severity_tool(features_json: str) -> str:
     Run the trained ML severity classifier on extracted IOC features.
 
     Input: JSON string of feature key-value pairs. Keys must match the
-    31 features extracted from VirusTotal, AbuseIPDB, Shodan, and OTX:
+    31 features extracted from VirusTotal, AbuseIPDB, Shodan, and OTx_df:
     vt_malicious_ratio, vt_suspicious_count, vt_reputation,
     abuse_confidence, abuse_total_reports, abuse_distinct_users,
     abuse_is_tor, abuse_categories_count, shodan_open_ports_count,

@@ -4,7 +4,6 @@ import { cn } from "../../lib/utils";
 import { useTheme } from "../ThemeContext";
 import MetricCard from "../MetricCard";
 import DashboardCard from "../DashboardCard";
-import SeverityTag from "../SeverityTag";
 import ReportPreview from "../ReportPreview";
 
 const containerVariants = {
@@ -38,7 +37,7 @@ function fmtTime(ts) {
 const severityBars = [
   { key: "CRITICAL", label: "CRITICAL", barClass: "bg-red-500" },
   { key: "HIGH", label: "HIGH", barClass: "bg-amber-500" },
-  { key: "LOW", label: "LOW", barClass: "bg-blue-500" },
+  { key: "LOW", label: "LOW", barClass: "bg-teal-500" },
   { key: "CLEAN", label: "CLEAN", barClass: "bg-green-500" },
 ];
 
@@ -228,7 +227,7 @@ export default function DashboardTab({
       {/* Report Preview */}
       {selReport && selReport.ioc && (
         <motion.div variants={itemVariants}>
-          <ReportPreview report={selReport} />
+          <ReportPreview report={selReport} onReRun={onReRun} onIgnore={onIgnore} ignoredIocs={ignoredIocs} />
         </motion.div>
       )}
     </motion.div>

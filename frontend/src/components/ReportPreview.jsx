@@ -1,10 +1,12 @@
-import React, { useState } from "react";
-import { ShieldAlert, ExternalLink, RotateCcw, Flag, CheckCircle, ThumbsDown } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { ExternalLink, RotateCcw, Flag, CheckCircle, ThumbsDown } from "lucide-react";
 import { useTheme } from "./ThemeContext";
 import { motion } from "framer-motion";
 import { cn } from "../lib/utils";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+
 
 function WhyThisSeverity({ report, mlFeatures }) {
   const reasons = [];
@@ -174,6 +176,8 @@ export default function ReportPreview({ report, onReRun, onIgnore, ignoredIocs }
         )}
 
         <WhyThisSeverity report={r} mlFeatures={report.ml_features} />
+
+
 
         {r.recommended_actions?.length > 0 && (
           <div>

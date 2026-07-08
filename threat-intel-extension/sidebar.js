@@ -14,6 +14,8 @@
   });
 
   function init() {
+    var dashBtn = $('dashBtn');
+    if (dashBtn) dashBtn.href = API;
     bindEvents();
     checkHealth();
     connectBackground();
@@ -163,7 +165,7 @@
     var confColor = conf >= 70 ? 'var(--success)' : conf >= 40 ? 'var(--warning)' : 'var(--danger)';
 
     var riskLabel = riskScore !== null
-      ? (riskScore < 0.3 ? 'LOW' : riskScore < 0.6 ? 'MEDIUM' : riskScore < 0.8 ? 'HIGH' : 'CRITICAL')
+      ? (riskScore < 0.4 ? 'LOW' : riskScore < 0.8 ? 'HIGH' : 'CRITICAL')
       : (sev === 'CRITICAL' ? 'CRITICAL' : sev === 'HIGH' ? 'HIGH' : sev === 'LOW' || sev === 'CLEAN' ? 'LOW' : 'UNKNOWN');
 
     if (!findings.length) {

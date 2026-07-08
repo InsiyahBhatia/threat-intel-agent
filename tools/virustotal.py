@@ -4,9 +4,18 @@ Free tier: 500 requests/day, 4 requests/minute.
 """
 
 import os
-import requests
-from langchain_core.tools import tool
+import threading
 
+import httpx
+
+from utils.decorators import tool
+
+_tls = threading.local()
+
+def _get_client() -> httpx.Client:
+    if not hasattr(_tls, "client"):
+        _tls.client = httpx.Client(timeout=10.0, follow_redirects=False)
+    return _tls.client
 
 VT_API_KEY = os.getenv("VIRUSTOTAL_API_KEY")
 VT_BASE = "https://www.virustotal.com/api/v3"
@@ -18,7 +27,8 @@ HEADERS = {
 
 
 def _query_ip(ip: str) -> dict:
-    resp = requests.get(f"{VT_BASE}/ip_addresses/{ip}", headers=HEADERS, timeout=10)
+    client = _get_client()
+    resp = client.get(f"{VT_BASE}/ip_addresses/{ip}", headers=HEADERS)
     resp.raise_for_status()
     data = resp.json()["data"]["attributes"]
     stats = data.get("last_analysis_stats", {})
@@ -36,7 +46,8 @@ def _query_ip(ip: str) -> dict:
 
 
 def _query_domain(domain: str) -> dict:
-    resp = requests.get(f"{VT_BASE}/domains/{domain}", headers=HEADERS, timeout=10)
+    client = _get_client()
+    resp = client.get(f"{VT_BASE}/domains/{domain}", headers=HEADERS)
     resp.raise_for_status()
     data = resp.json()["data"]["attributes"]
     stats = data.get("last_analysis_stats", {})
@@ -54,7 +65,8 @@ def _query_domain(domain: str) -> dict:
 
 
 def _query_hash(file_hash: str) -> dict:
-    resp = requests.get(f"{VT_BASE}/files/{file_hash}", headers=HEADERS, timeout=10)
+    client = _get_client()
+    resp = client.get(f"{VT_BASE}/files/{file_hash}", headers=HEADERS)
     resp.raise_for_status()
     data = resp.json()["data"]["attributes"]
     stats = data.get("last_analysis_stats", {})

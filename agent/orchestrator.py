@@ -3,37 +3,48 @@ Threat Intelligence Agent - Core Orchestrator.
 
 Default pipeline:
 1. classify the IOC locally
-2. call configured enrichment tools directly
+2. call configured enrichment tools in parallel
 3. map observed behavior to MITRE ATT&CK
 4. score evidence with the trainable local risk model
 
 No external LLM is used by this pipeline.
 """
 
+import asyncio
+import contextlib
+import functools
 import logging
-from pathlib import Path
+import os
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-from models.report import ThreatReport
-from tools.abuseipdb import _query_abuseipdb, abuseipdb_tool
-from tools.mitre_mapper import mitre_mapper_tool
-from tools.shodan import _query_shodan, shodan_tool
-from tools.virustotal import _query_domain, _query_hash, _query_ip, virustotal_tool
-from tools.ml_classifier import predict_ml_severity
-from tools.otx import _query_otx, otx_tool
-from utils.classifier import classify_ioc
-from utils.ml_features import extract_ml_features
-from utils.risk_model import predict_risk
+_DEMO_MODE = os.getenv("TIA_DEMO_MODE", "").lower() in ("true", "1", "yes")
+
+_HAS_API_KEYS = any(os.getenv(k) for k in ("VIRUSTOTAL_API_KEY", "SHODAN_API_KEY", "ABUSEIPDB_API_KEY", "OTX_API_KEY"))
+if not _DEMO_MODE and not _HAS_API_KEYS:
+    logger.warning("No API keys found — enabling demo mode. Set VIRUSTOTAL_API_KEY, SHODAN_API_KEY, ABUSEIPDB_API_KEY, or OTX_API_KEY in .env for live enrichment.")
+    _DEMO_MODE = True
+
+from models.report import ThreatReport  # noqa: E402
+from tools.abuseipdb import _query_abuseipdb, abuseipdb_tool  # noqa: E402
+from tools.mitre_mapper import mitre_mapper_tool  # noqa: E402
+from tools.ml_classifier import predict_ml_severity  # noqa: E402
+from tools.otx import _query_otx, otx_tool  # noqa: E402
+from tools.shodan import _query_shodan, shodan_tool  # noqa: E402
+from tools.virustotal import _query_domain, _query_hash, _query_ip, virustotal_tool  # noqa: E402
+from utils.classifier import classify_ioc  # noqa: E402
+from utils.ml_features import extract_ml_features  # noqa: E402
+from utils.risk_model import predict_risk  # noqa: E402
 
 # Severity levels in order (used for disagreement distance)
-_SEVERITY_RANK = {"CLEAN": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+_SEVERITY_RANK = {"CLEAN": 0, "LOW": 1, "HIGH": 2, "CRITICAL": 3}
 
 
 DEMO_FIXTURES = {
@@ -94,7 +105,7 @@ def _extract_mitre_techniques(text: str) -> list[dict]:
     techniques = []
     seen = set()
     pattern = re.compile(
-        r"\[(T\d{4}(?:\.\d{3})?)\]\s+([^\n]+?)\s+(?:->|→|–)\s+([^\n]+)",
+        r"\[(T\d{4}(?:\.\d{3})?)\]\s+([^\n]+?)\s+(?:->|→|-)\s+([^\n]+)",
         re.IGNORECASE,
     )
     for match in pattern.finditer(text):
@@ -133,6 +144,47 @@ def _recommended_actions(severity: str, text: str) -> list[str]:
         actions.append("Keep the IOC on watchlist monitoring instead of escalating unless new detections appear.")
 
     return actions[:6]
+
+
+def _generate_recommended_actions_groq(ioc: str, ioc_type: str, severity: str, confidence: float, evidence: str, mitre_techniques: list, ml_result: dict | None) -> list[str]:
+    """Generate context-aware recommended actions using Groq LLM."""
+    groq_key = os.getenv("GROQ_API_KEY")
+    if not groq_key:
+        return _recommended_actions(severity, evidence)
+
+    try:
+        from groq import Groq
+        client = Groq(api_key=groq_key)
+
+        mitre_summary = ", ".join([f"{t['technique_id']} ({t['name']})" for t in mitre_techniques[:5]])
+        ml_info = f"ML verdict: {ml_result.get('severity', 'N/A')} (conf: {ml_result.get('confidence', 'N/A')}%)" if ml_result else "ML: unavailable"
+
+        prompt = f"""You are a senior SOC analyst. Generate 5-6 specific, actionable recommended steps for investigating this IOC.
+
+IOC: {ioc} ({ioc_type})
+Severity: {severity} (confidence: {confidence}%)
+{ml_info}
+MITRE ATT&CK: {mitre_summary or "None identified"}
+Evidence summary: {evidence[:1500]}
+
+Return ONLY a JSON array of strings, each a concrete recommended action. No markdown, no explanation.
+Example: ["Block IOC at perimeter and DNS", "Search firewall logs for connections to this IP", "..."]"""
+
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=500,
+        )
+        content = resp.choices[0].message.content.strip()
+        import json
+        actions = json.loads(content)
+        if isinstance(actions, list) and all(isinstance(a, str) for a in actions):
+            return actions[:6]
+    except Exception as e:
+        logger.warning(f"Groq recommended actions failed: {e}")
+
+    return _recommended_actions(severity, evidence)
 
 
 def _threat_category(text: str, ioc_type: str) -> str:
@@ -179,7 +231,7 @@ def _ml_verdict_block(
             f"{gap} severity levels — recommend human review."
         )
     elif gap == 1:
-        verdict_note = "  ℹ\ufe0f Minor divergence between ML and logistic verdict (±1 level)."
+        verdict_note = "  i Minor divergence between ML and logistic verdict (+/-1 level)."
     else:
         verdict_note = "  ✓ ML and logistic verdicts agree."
 
@@ -216,12 +268,44 @@ def build_structured_report(
         use_ensemble = False
 
     if ml_result and use_ensemble:
-        primary_severity = ml_result["severity"]
-        primary_confidence = ml_result["confidence"]
-        risk_score = _ensemble_risk_score(ml_result["probabilities"])
-        risk_features = ml_features_dict or {}
-        model_name = ml_result.get("model_name", "Ensemble(XGB+LGB)")
-        model_version = 2
+        # If ML confidence is very low (<30%) but we have strong risk signals,
+        # fall back to the logistic risk model which is better calibrated for clear threats
+        ml_conf = ml_result["confidence"]
+        strong_signals = (
+            ml_features_dict and (
+                ml_features_dict.get("abuse_confidence", 0) >= 90 or
+                ml_features_dict.get("vt_malicious_ratio", 0) >= 0.15 or
+                ml_features_dict.get("abuse_is_tor", 0) or
+                ml_features_dict.get("is_tor", 0)
+            )
+        )
+        if ml_conf < 30 and strong_signals:
+            logger.warning("ML confidence %d%% below threshold with strong signals — using risk model", ml_conf)
+            prediction = predict_risk(evidence, ml_features=ml_features_dict)
+            primary_severity = prediction.severity
+            primary_confidence = prediction.confidence_score
+            risk_score = prediction.risk_score
+            risk_features = prediction.features
+            model_name = "local-ioc-risk-model (fallback from low-conf ML)"
+            model_version = prediction.model_version
+
+            # Safety override: if risk model returns LOW but raw signals are unequivocally malicious,
+            # force HIGH severity. This handles cases where feature mapping fails silently.
+            abuse_conf = ml_features_dict.get("abuse_confidence", 0)
+            vt_mal = ml_features_dict.get("vt_malicious_ratio", 0)
+            is_tor = ml_features_dict.get("abuse_is_tor", 0) or ml_features_dict.get("is_tor", 0)
+            if primary_severity == "LOW" and abuse_conf >= 90 and (is_tor or vt_mal >= 0.15):
+                logger.warning("Risk model returned LOW despite abuse_conf=%d, is_tor=%s, vt_mal=%.3f — overriding to HIGH",
+                               abuse_conf, is_tor, vt_mal)
+                primary_severity = "HIGH"
+                primary_confidence = max(primary_confidence, 75)
+        else:
+            primary_severity = ml_result["severity"]
+            primary_confidence = ml_result["confidence"]
+            risk_score = _ensemble_risk_score(ml_result["probabilities"])
+            risk_features = ml_features_dict or {}
+            model_name = ml_result.get("model_name", "Ensemble(XGB+LGB)")
+            model_version = 2
     else:
         has_enrichment = ml_features_dict and any(ml_features_dict.get(k, 0) for k in ("has_vt_data", "has_abuse_data", "has_shodan_data"))
         if ml_features_dict is not None and not has_enrichment:
@@ -248,7 +332,9 @@ def build_structured_report(
         summary=summary[:700],
         threat_category=_threat_category(evidence, ioc_type),
         mitre_techniques=_extract_mitre_techniques(evidence),
-        recommended_actions=_recommended_actions(primary_severity, evidence),
+        recommended_actions=_generate_recommended_actions_groq(
+            ioc, ioc_type, primary_severity, primary_confidence, evidence, _extract_mitre_techniques(evidence), ml_result
+        ),
         tool_findings=[],
     ).model_dump() | {
         "risk_score": risk_score,
@@ -265,7 +351,7 @@ def build_structured_report(
     return base
 
 
-SEVERITY_LEVEL = {"CLEAN": 0.0, "LOW": 0.25, "MEDIUM": 0.5, "HIGH": 0.75, "CRITICAL": 1.0}
+SEVERITY_LEVEL = {"CLEAN": 0.0, "LOW": 0.25, "HIGH": 0.75, "CRITICAL": 1.0}
 
 
 def _ensemble_risk_score(probabilities: dict) -> float:
@@ -279,15 +365,15 @@ def _tool_text(name: str, result: str) -> str:
 def _call_tool(name: str, tool_obj, value: str) -> str:
     try:
         return _tool_text(name, tool_obj.invoke(value))
-    except Exception as exc:
-        return f"[{name}] Request failed: {exc}"
+    except Exception:
+        return f"[{name}] Request failed"
 
 
-def _build_local_evidence(
+async def _build_local_evidence(  # noqa: PLR0915
     ioc: str, ioc_type: str
 ) -> tuple[str, list[dict], dict | None, dict | None]:
     """
-    Run all enrichment tools in parallel using a thread pool and return:
+    Run all enrichment tools in parallel using asyncio.to_thread and return:
       (evidence_text, intermediate_steps, ml_result, features)
     ml_result is None when the model is not trained yet.
     """
@@ -299,121 +385,125 @@ def _build_local_evidence(
         f"[Local Classifier] IOC: {ioc}\n  Classified type: {ioc_type}",
     ]
 
-    def _run_vt():
-        raw: dict = {}
-        try:
-            ioc_clean = ioc.split(":")[0] if re.match(r"^\d{1,3}(\.\d{1,3}){3}:\d+$", ioc) else ioc
-            if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ioc_clean):
-                raw = _query_ip(ioc_clean)
-            elif re.match(r"^[a-fA-F0-9]{32,64}$", ioc_clean):
-                raw = _query_hash(ioc_clean)
-            else:
-                raw = _query_domain(ioc_clean)
-        except Exception:
-            pass
-        return ("vt_raw", raw, "VirusTotal", _call_tool("VirusTotal", virustotal_tool, ioc))
-
-    def _run_shodan():
-        raw: dict = {}
-        text = f"[Shodan] Skipped: '{ioc}' is not an IP address. Shodan only accepts IPs."
-        if ioc_type == "ip":
-            try:
-                raw = _query_shodan(ioc)
-            except Exception:
-                pass
-            text = _call_tool("Shodan", shodan_tool, ioc)
-        return ("shodan_raw", raw, "Shodan", text)
-
-    def _run_abuse():
-        raw: dict = {}
-        text = f"[AbuseIPDB] Skipped: '{ioc}' is not an IP address."
-        if ioc_type == "ip":
-            try:
-                raw = _query_abuseipdb(ioc)
-            except Exception:
-                pass
-            text = _call_tool("AbuseIPDB", abuseipdb_tool, ioc)
-        return ("abuse_raw", raw, "AbuseIPDB", text)
-
-    def _run_otx():
+    async def _run_vt():
         raw: dict = {}
         text = ""
         try:
-            raw = _query_otx(ioc)
-            text = _call_tool("AlienVault OTX", otx_tool, ioc)
-        except Exception:
-            pass
+            ioc_clean = ioc.split(":")[0] if re.match(r"^\d{1,3}(\.\d{1,3}){3}:\d+$", ioc) else ioc
+            if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ioc_clean):
+                raw = await asyncio.to_thread(_query_ip, ioc_clean)
+            elif re.match(r"^[a-fA-F0-9]{32,64}$", ioc_clean):
+                raw = await asyncio.to_thread(_query_hash, ioc_clean)
+            else:
+                raw = await asyncio.to_thread(_query_domain, ioc_clean)
+        except Exception as exc:
+            logger.warning("VirusTotal query failed for %s: %s", ioc, exc)
+        text = await asyncio.to_thread(_call_tool, "VirusTotal", virustotal_tool, ioc)
+        return ("vt_raw", raw, "VirusTotal", text)
+
+    async def _run_shodan():
+        raw: dict = {}
+        text = f"[Shodan] Skipped: '{ioc}' is not an IP address. Shodan only accepts IPs."
+        if ioc_type == "ip":
+            with contextlib.suppress(Exception):
+                raw = await asyncio.to_thread(_query_shodan, ioc)
+            text = await asyncio.to_thread(_call_tool, "Shodan", shodan_tool, ioc)
+        return ("shodan_raw", raw, "Shodan", text)
+
+    async def _run_abuse():
+        raw: dict = {}
+        text = f"[AbuseIPDB] Skipped: '{ioc}' is not an IP address."
+        if ioc_type == "ip":
+            with contextlib.suppress(Exception):
+                raw = await asyncio.to_thread(_query_abuseipdb, ioc)
+            text = await asyncio.to_thread(_call_tool, "AbuseIPDB", abuseipdb_tool, ioc)
+        return ("abuse_raw", raw, "AbuseIPDB", text)
+
+    async def _run_otx():
+        raw: dict = {}
+        text = ""
+        try:
+            raw = await asyncio.to_thread(_query_otx, ioc)
+            text = await asyncio.to_thread(_call_tool, "AlienVault OTX", otx_tool, ioc)
+        except Exception as exc:
+            logger.warning("OTX query failed for %s: %s", ioc, exc)
         return ("otx_raw", raw, "AlienVault OTX", text)
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {
-            pool.submit(_run_vt): "vt",
-            pool.submit(_run_shodan): "shodan",
-            pool.submit(_run_abuse): "abuse",
-            pool.submit(_run_otx): "otx",
-        }
-        for fut in as_completed(futures):
-            try:
-                key, raw, tool_name, text = fut.result()
-                raw_data[key] = raw
-                if key == "otx_raw" and not text:
-                    continue
-                results[tool_name] = text
-                steps.append({"tool": tool_name.lower().replace(" ", "_"), "input": ioc, "output": text})
-            except Exception:
-                pass
+    tool_coros = [_run_vt(), _run_shodan(), _run_abuse(), _run_otx()]
+    for coro in asyncio.as_completed(tool_coros):
+        try:
+            key, raw, tool_name, text = await coro
+        except Exception as exc:
+            logger.warning("A parallel tool failed for %s: %s", ioc, exc)
+            continue
+        raw_data[key] = raw
+        if key == "otx_raw" and not text:
+            continue
+        results[tool_name] = text
+        steps.append({"tool": tool_name.lower().replace(" ", "_"), "input": ioc, "output": text})
 
     for tool_name in ["VirusTotal", "Shodan", "AbuseIPDB", "AlienVault OTX"]:
         if tool_name in results:
             chunks.append(results[tool_name])
 
-    # ── MITRE mapping ─────────────────────────────────────────────────────────
+    # ── MITRE mapping (sync, fast) ─────────────────────────────────────────
     context = "\n".join(chunks)
-    mitre = _call_tool("MITRE ATT&CK Mapper", mitre_mapper_tool, context)
+    mitre = await asyncio.to_thread(_call_tool, "MITRE ATT&CK Mapper", mitre_mapper_tool, context)
     chunks.append(mitre)
     steps.append({"tool": "mitre_mapper", "input": "combined evidence", "output": mitre})
 
-    # ── ML Classifier ─────────────────────────────────────────────────────────
+    # ── ML Classifier (sync, CPU-bound) ─────────────────────────────────────
     ml_result: dict | None = None
     features: dict | None = None
     try:
-        features = extract_ml_features(
+        features = await asyncio.to_thread(extract_ml_features,
             ioc_type,
             raw_data.get("vt_raw", {}),
             raw_data.get("abuse_raw", {}),
             raw_data.get("shodan_raw", {}),
             raw_data.get("otx_raw", {}),
         )
-        ml_result = predict_ml_severity(features)
+        ml_result = await asyncio.to_thread(predict_ml_severity, features)
     except Exception as e:
         logger.warning("ML classifier failed for %s: %s", ioc, e)
 
     return "\n\n".join(chunks), steps, ml_result, features
 
 
-def investigate(ioc: str) -> dict:
-    """Investigate an IOC using only the local model pipeline."""
-    ioc_type = classify_ioc(ioc)
+_INVESTIGATE_CACHE: dict[str, tuple[float, dict]] = {}
+_INVESTIGATE_CACHE_TTL = int(os.getenv("TIA_CACHE_TTL_SECONDS", "300"))
+_INVESTIGATE_CACHE_MAX = int(os.getenv("TIA_CACHE_MAX_ENTRIES", "100"))
 
-    if ioc in DEMO_FIXTURES:
+
+async def investigate(ioc: str) -> dict:
+    """Investigate an IOC using only the local model pipeline."""
+    key = ioc.strip().lower()
+    now = time.time()
+    cached = _INVESTIGATE_CACHE.get(key)
+    if cached and (now - cached[0]) < _INVESTIGATE_CACHE_TTL:
+        logger.debug("Cache hit for %s", key)
+        return cached[1]
+
+    ioc_type = await asyncio.to_thread(classify_ioc, ioc)
+
+    if _DEMO_MODE and ioc in DEMO_FIXTURES:
         evidence = DEMO_FIXTURES[ioc]
         intermediate_steps = []
         features = None
         ml_result = None
     else:
-        evidence, intermediate_steps, ml_result, features = _build_local_evidence(ioc, ioc_type)
+        evidence, intermediate_steps, ml_result, features = await _build_local_evidence(ioc, ioc_type)
 
-    # Append ML verdict block to evidence text when available
     if ml_result:
         has_enrichment = features and any(features.get(k, 0) for k in ("has_vt_data", "has_abuse_data", "has_shodan_data"))
         logistic_sev = "UNKNOWN"
         if has_enrichment:
-            logistic_sev = predict_risk(evidence, ml_features=features).severity
+            logistic_sev = (await asyncio.to_thread(predict_risk, evidence, ml_features=features)).severity
         ml_block = _ml_verdict_block(ml_result, logistic_sev)
         evidence = evidence + "\n\n" + ml_block
 
-    report = build_structured_report(ioc, ioc_type, evidence, ml_result, features)
-    return {
+    report = await asyncio.to_thread(build_structured_report, ioc, ioc_type, evidence, ml_result, features)
+    result = {
         "ioc": ioc,
         "ioc_type": ioc_type,
         "agent_output": evidence,
@@ -425,3 +515,8 @@ def investigate(ioc: str) -> dict:
         "summary": report.get("summary", ""),
         "mitre_techniques": report.get("mitre_techniques", []),
     }
+    if len(_INVESTIGATE_CACHE) >= _INVESTIGATE_CACHE_MAX:
+        oldest = min(_INVESTIGATE_CACHE, key=lambda k: _INVESTIGATE_CACHE[k][0])
+        del _INVESTIGATE_CACHE[oldest]
+    _INVESTIGATE_CACHE[key] = (time.time(), result)
+    return result

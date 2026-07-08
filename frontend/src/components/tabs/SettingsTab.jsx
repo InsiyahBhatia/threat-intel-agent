@@ -1,5 +1,4 @@
 import React from "react";
-import {} from "lucide-react";
 import SeverityTag from "../SeverityTag";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "../../lib/utils";

@@ -3,8 +3,7 @@ MITRE ATT&CK Mapper Tool — maps observed IOC behaviors to ATT&CK techniques.
 Uses a curated lookup table + LLM reasoning; no external API required.
 """
 
-from langchain_core.tools import tool
-
+from utils.decorators import tool
 
 # Curated mapping: observable signals -> ATT&CK techniques
 # Format: signal_keyword -> [(TID, Tactic, Technique Name, Description)]

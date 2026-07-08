@@ -11,8 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from utils.risk_model import MODEL_PATH, save_model, train_model
-
+from utils.risk_model import MODEL_PATH, save_model, train_model  # noqa: E402
 
 TRAINING_RECORDS = [
     # ── HIGH / CRITICAL ──────────────────────────────────────────────────────

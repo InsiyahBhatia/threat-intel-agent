@@ -4,9 +4,18 @@ Free tier: 1000 checks/day.
 """
 
 import os
-import requests
-from langchain_core.tools import tool
+import threading
 
+import httpx
+
+from utils.decorators import tool
+
+_tls = threading.local()
+
+def _get_client() -> httpx.Client:
+    if not hasattr(_tls, "client"):
+        _tls.client = httpx.Client(timeout=10.0, follow_redirects=False)
+    return _tls.client
 
 ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY")
 ABUSEIPDB_BASE = "https://api.abuseipdb.com/api/v2"
@@ -25,7 +34,8 @@ CATEGORY_MAP = {
 
 def _query_abuseipdb(ip: str) -> dict:
     """Return structured AbuseIPDB data for an IP. Raises on network error."""
-    resp = requests.get(
+    client = _get_client()
+    resp = client.get(
         f"{ABUSEIPDB_BASE}/check",
         headers={
             "Key": ABUSEIPDB_API_KEY,
@@ -36,7 +46,6 @@ def _query_abuseipdb(ip: str) -> dict:
             "maxAgeInDays": 90,
             "verbose": True,
         },
-        timeout=10,
     )
     resp.raise_for_status()
     data = resp.json().get("data", {})
@@ -83,7 +92,7 @@ def abuseipdb_tool(ip: str) -> str:
 
     try:
         data = _query_abuseipdb(ip)
-    except requests.RequestException as e:
+    except httpx.HTTPError as e:
         return f"[AbuseIPDB] Request failed: {e}"
 
     confidence = data["confidence"]
@@ -113,7 +122,7 @@ def abuseipdb_tool(ip: str) -> str:
     if confidence >= 75:
         output += "  ⚠ HIGH RISK: This IP has a high abuse confidence score.\n"
     elif confidence >= 25:
-        output += "  ⚠ MEDIUM RISK: This IP has moderate abuse reports.\n"
+        output += "  ⚠ MODERATE RISK: This IP has moderate abuse reports.\n"
     else:
         output += "  ✓ LOW RISK: Few or no abuse reports found.\n"
 

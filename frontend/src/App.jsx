@@ -1,7 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { ThemeProvider, useTheme } from "./components/ThemeContext";
 import SeverityTag from "./components/SeverityTag";
-import StatCard from "./components/StatCard";
 import Toast from "./components/Toast";
 import TimelineView from "./components/TimelineView";
 import useKeyboardShortcuts from "./components/KeyboardShortcuts";
@@ -22,9 +21,7 @@ import SettingsTab from "./components/tabs/SettingsTab";
 import { Network } from "vis-network";
 import { DataSet } from "vis-data";
 import "vis-network/styles/vis-network.min.css";
-import brandIcon from "./assest/brand-icon.png";
 import YaraTab from "./components/tabs/YaraTab";
-import IntegrationsTab from "./components/tabs/IntegrationsTab";
 import NotificationsTab from "./components/tabs/NotificationsTab";
 import FeedbackTab from "./components/tabs/FeedbackTab";
 import SyslogTab from "./components/tabs/SyslogTab";
@@ -232,12 +229,11 @@ function AppInner() {
   const stats = useMemo(() => {
     const t = history.length, c = history.filter(h => h.severity === "CRITICAL").length;
     const h = history.filter(x => x.severity === "HIGH").length;
-    const m = history.filter(x => x.severity === "MEDIUM").length;
-    return { total: t, critical: c, high: h, medium: m, priority: c + h };
+    return { total: t, critical: c, high: h, medium: 0, priority: c + h };
   }, [history]);
 
   const categoryBreakdown = useMemo(() => {
-    const order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "CLEAN", "UNKNOWN"];
+    const order = ["CRITICAL", "HIGH", "LOW", "CLEAN", "UNKNOWN"];
     const map = {};
     order.forEach(s => map[s] = 0);
     history.forEach(h => { const s = h.severity || "UNKNOWN"; if (s in map) map[s]++; });
@@ -259,7 +255,7 @@ function AppInner() {
     return Object.entries(days).map(([date, count]) => ({ date, count }));
   }, [history]);
 
-  const chartMax = useMemo(() => Math.max(1, stats.critical, stats.high, stats.medium,
+  const chartMax = useMemo(() => Math.max(1, stats.critical, stats.high,
     history.filter(h => h.severity === "LOW").length, history.filter(h => h.severity === "CLEAN").length), [history, stats]);
 
   const healthStatus = health?.status === "healthy" ? "healthy" : health?.status === "demo_mode" ? "degraded" : "offline";
@@ -720,9 +716,7 @@ function AppInner() {
           <YaraTab palette={palette} />
         )}
 
-        {activeTab === "integrations" && (
-          <IntegrationsTab palette={palette} />
-        )}
+        
 
         {activeTab === "notifications" && (
           <NotificationsTab palette={palette} />

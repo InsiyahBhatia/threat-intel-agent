@@ -3,14 +3,14 @@ Notification Engine — dispatches alerts to Slack and Email (SMTP)
 when CRITICAL or HIGH severity IOCs are detected.
 """
 
-import os
+import asyncio
 import json
 import logging
+import os
 import smtplib
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Optional
 
 import httpx
 from dotenv import load_dotenv
@@ -22,23 +22,38 @@ load_dotenv(ROOT_DIR / ".env")
 NOTIFICATION_CONFIG_FILE = ROOT_DIR / "data" / "notification_config.json"
 
 
-def _load_notification_config() -> dict:
+def _load_notification_config() -> dict:  # noqa: PLR0912
     cfg = {
         "email": {
             "enabled": False, "smtp_host": "", "smtp_port": 587,
             "smtp_user": "", "smtp_pass": "", "from_addr": "", "to_addrs": []
         },
         "slack": {"enabled": False, "webhook_url": ""},
+        "teams": {"enabled": False, "webhook_url": ""},
     }
     if NOTIFICATION_CONFIG_FILE.exists():
         try:
-            cfg.update(json.loads(NOTIFICATION_CONFIG_FILE.read_text()))
+            file_cfg = json.loads(NOTIFICATION_CONFIG_FILE.read_text())
+            for key in ("slack", "teams"):
+                if key in file_cfg:
+                    cfg[key].update(
+                        {k: v for k, v in file_cfg[key].items()
+                         if k != "webhook_url" or not os.getenv(f"{key.upper()}_WEBHOOK_URL")}
+                    )
+            if "email" in file_cfg:
+                cfg["email"].update(
+                    {k: v for k, v in file_cfg["email"].items()
+                     if k not in ("smtp_pass", "smtp_user")}
+                )
         except Exception as e:
             logger.warning(f"Corrupt notification config: {e}")
 
     if os.getenv("SLACK_WEBHOOK_URL"):
         cfg["slack"]["webhook_url"] = os.getenv("SLACK_WEBHOOK_URL")
         cfg["slack"]["enabled"] = True
+    if os.getenv("TEAMS_WEBHOOK_URL"):
+        cfg["teams"]["webhook_url"] = os.getenv("TEAMS_WEBHOOK_URL")
+        cfg["teams"]["enabled"] = True
     if os.getenv("SMTP_HOST"):
         cfg["email"]["smtp_host"] = os.getenv("SMTP_HOST")
         cfg["email"]["enabled"] = True
@@ -56,8 +71,24 @@ def _load_notification_config() -> dict:
     return cfg
 
 
+def _save_notification_config(cfg: dict) -> None:
+    safe = {
+        "slack": {"enabled": cfg.get("slack", {}).get("enabled", False)},
+        "teams": {"enabled": cfg.get("teams", {}).get("enabled", False)},
+        "email": {
+            "enabled": cfg.get("email", {}).get("enabled", False),
+            "smtp_host": cfg.get("email", {}).get("smtp_host", ""),
+            "smtp_port": cfg.get("email", {}).get("smtp_port", 587),
+            "from_addr": cfg.get("email", {}).get("from_addr", ""),
+            "to_addrs": cfg.get("email", {}).get("to_addrs", []),
+        },
+    }
+    NOTIFICATION_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    NOTIFICATION_CONFIG_FILE.write_text(json.dumps(safe, indent=2))
+
+
 def _severity_emoji(sev: str) -> str:
-    return {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🟢", "CLEAN": "✅"}.get(sev, "⬜")
+    return {"CRITICAL": "🔴", "HIGH": "🟠", "LOW": "🟢", "CLEAN": "✅"}.get(sev, "⬜")
 
 
 def _build_alert_text(ioc: str, severity: str, report: dict) -> str:
@@ -85,9 +116,8 @@ def _build_alert_text(ioc: str, severity: str, report: dict) -> str:
 
 def _build_html_body(ioc: str, severity: str, report: dict) -> str:
     emoji = _severity_emoji(severity)
-    sev_color = {"CRITICAL": "#dc3545", "HIGH": "#fd7e14", "MEDIUM": "#ffc107", "LOW": "#28a745", "CLEAN": "#28a745"}.get(severity, "#6c757d")
+    sev_color = {"CRITICAL": "#dc3545", "HIGH": "#fd7e14", "LOW": "#28a745", "CLEAN": "#28a745"}.get(severity, "#6c757d")
 
-    sev_lower = severity.lower()
     mitre_rows = ""
     for t in report.get("mitre_techniques", [])[:5]:
         mitre_rows += f"<tr><td>{t.get('technique_id','')}</td><td>{t.get('name','')}</td><td>{t.get('tactic','')}</td></tr>"
@@ -186,7 +216,6 @@ def send_email_alert(ioc: str, severity: str, report: dict) -> tuple[bool, str]:
     if not email_cfg.get("smtp_host") or not email_cfg.get("from_addr") or not email_cfg.get("to_addrs"):
         return False, "SMTP not fully configured"
 
-    emoji = _severity_emoji(severity)
     subject = f"[{severity}] Threat Alert — {ioc} ({report.get('ioc_type', 'unknown')})"
     html_body = _build_html_body(ioc, severity, report)
 
@@ -224,10 +253,12 @@ async def send_notifications(ioc: str, severity: str, report: dict) -> dict:
     results = {"slack": None, "email": None}
 
     if severity in ("CRITICAL", "HIGH"):
-        slack_ok, slack_msg = await send_slack_alert(ioc, severity, report)
+        email_coro = asyncio.to_thread(send_email_alert, ioc, severity, report)
+        slack_coro = send_slack_alert(ioc, severity, report)
+        slack_result, email_result = await asyncio.gather(slack_coro, email_coro)
+        slack_ok, slack_msg = slack_result
+        email_ok, email_msg = email_result
         results["slack"] = {"status": "sent" if slack_ok else "failed", "detail": slack_msg}
-
-        email_ok, email_msg = send_email_alert(ioc, severity, report)
         results["email"] = {"status": "sent" if email_ok else "failed", "detail": email_msg}
 
     return results

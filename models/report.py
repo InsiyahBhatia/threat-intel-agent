@@ -4,10 +4,10 @@ The LLM is prompted to produce output that matches this schema,
 which is then validated and serialized to JSON for the API response.
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SeverityLevel(str, Enum):
@@ -35,7 +35,7 @@ class MITRETechnique(BaseModel):
 class ToolFinding(BaseModel):
     tool_name: str = Field(description="Name of the tool that produced this finding")
     summary: str = Field(description="Key findings from this tool in 1-3 sentences")
-    raw_output: Optional[str] = Field(default=None, description="Full raw output from the tool")
+    raw_output: str | None = Field(default=None, description="Full raw output from the tool")
 
 
 class ThreatReport(BaseModel):
@@ -52,7 +52,7 @@ class ThreatReport(BaseModel):
     summary: str = Field(
         description="2-4 sentence executive summary of the threat findings"
     )
-    threat_category: Optional[str] = Field(
+    threat_category: str | None = Field(
         default=None,
         description="Threat category if known (e.g. 'C2 Infrastructure', 'Phishing', 'Botnet')"
     )
@@ -72,17 +72,16 @@ class ThreatReport(BaseModel):
         default_factory=list,
         description="Additional IOCs discovered during investigation"
     )
-    false_positive_notes: Optional[str] = Field(
+    false_positive_notes: str | None = Field(
         default=None,
         description="Any notes about why this might be a false positive"
     )
     timestamp: str = Field(
-        default_factory=lambda: datetime.utcnow().isoformat() + "Z",
+        default_factory=lambda: datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         description="UTC timestamp of the investigation"
     )
 
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
 
     def to_markdown(self) -> str:
         """Render the report as a formatted Markdown string."""
@@ -93,15 +92,15 @@ class ThreatReport(BaseModel):
         emoji = severity_emoji.get(self.severity, "⬜")
 
         lines = [
-            f"# Threat Intelligence Report",
-            f"",
+            "# Threat Intelligence Report",
+            "",
             f"**IOC:** `{self.ioc}` ({self.ioc_type})",
             f"**Severity:** {emoji} {self.severity}  |  **Confidence:** {self.confidence_score}/100",
             f"**Timestamp:** {self.timestamp}",
-            f"",
-            f"## Summary",
+            "",
+            "## Summary",
             self.summary,
-            f"",
+            "",
         ]
 
         if self.threat_category:

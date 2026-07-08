@@ -4,9 +4,18 @@ Free tier: limited to /shodan/host/{ip} endpoint.
 """
 
 import os
-import requests
-from langchain_core.tools import tool
+import threading
 
+import httpx
+
+from utils.decorators import tool
+
+_tls = threading.local()
+
+def _get_client() -> httpx.Client:
+    if not hasattr(_tls, "client"):
+        _tls.client = httpx.Client(timeout=10.0, follow_redirects=False)
+    return _tls.client
 
 SHODAN_API_KEY = os.getenv("SHODAN_API_KEY")
 SHODAN_BASE = "https://api.shodan.io"
@@ -14,10 +23,10 @@ SHODAN_BASE = "https://api.shodan.io"
 
 def _query_shodan(ip: str) -> dict:
     """Return structured Shodan data for an IP. Raises on network error."""
-    resp = requests.get(
+    client = _get_client()
+    resp = client.get(
         f"{SHODAN_BASE}/shodan/host/{ip}",
         params={"key": SHODAN_API_KEY},
-        timeout=10,
     )
     if resp.status_code == 404:
         return {
@@ -75,7 +84,7 @@ def shodan_tool(ip: str) -> str:
 
     try:
         result = _query_shodan(ip)
-    except requests.RequestException as e:
+    except httpx.HTTPError as e:
         return f"[Shodan] Request failed: {e}"
 
     if not result["ports"]:

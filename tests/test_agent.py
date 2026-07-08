@@ -3,15 +3,17 @@ Tests for the Threat Intel Agent.
 Run with: pytest tests/ -v
 """
 
-import pytest
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import sys
+from pathlib import Path
 
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from agent.orchestrator import build_structured_report
+from tools.mitre_mapper import extract_signals, mitre_mapper_tool
 from utils.classifier import classify_ioc, validate_ioc
 from utils.risk_model import extract_features, predict_risk
-from tools.mitre_mapper import extract_signals, mitre_mapper_tool
-from agent.orchestrator import build_structured_report
-
 
 # ── IOC Classifier Tests ────────────────────────────────────────────────────
 
@@ -150,7 +152,7 @@ class TestRiskModel:
               [T1090.003] Command and Control -> Proxy: Multi-hop Proxy
             """,
         )
-        assert report["severity"] in {"MEDIUM", "HIGH", "CRITICAL"}
+        assert report["severity"] in {"HIGH", "CRITICAL"}
         assert report["risk_score"] > 0
         assert report["model_name"] == "local-ioc-risk-model"
         assert report["mitre_techniques"][0]["technique_id"] == "T1090.003"

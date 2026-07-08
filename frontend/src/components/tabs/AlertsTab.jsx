@@ -17,7 +17,7 @@ export default function AlertsTab({
   onFormatTime,
 }) {
   const stats = alertStats || { total: 0, by_severity: {} };
-  const severityOrder = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
+  const severityOrder = ["CRITICAL", "HIGH", "LOW"];
 
   return (
     <motion.div

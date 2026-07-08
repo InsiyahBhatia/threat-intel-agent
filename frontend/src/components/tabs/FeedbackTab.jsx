@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { cn } from "../../lib/utils";
 
-const API_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export default function FeedbackTab({ palette }) {
   const [feedbackList, setFeedbackList] = useState([]);
@@ -16,7 +16,7 @@ export default function FeedbackTab({ palette }) {
     setLoading(true);
     try {
       const r = await fetch(`${API_URL}/api/feedback`);
-      if (r.ok) setFeedbackList(await r.json());
+      if (r.ok) { const data = await r.json(); setFeedbackList(data.feedback || []); }
     } catch {}
     finally { setLoading(false); }
   }
@@ -87,12 +87,12 @@ export default function FeedbackTab({ palette }) {
             <div className="flex items-center gap-2">
               <span className="font-mono font-semibold text-text">{fb.ioc}</span>
               <span className="text-muted">predicted:</span>
-              <span className="font-medium">{fb.predicted_severity || fb.predicted_label}</span>
+              <span className="font-medium">{fb.predicted}</span>
               <span className="text-muted">→ corrected:</span>
-              <span className="font-medium text-green-500">{fb.corrected_severity || fb.correct_label}</span>
+              <span className="font-medium text-green-500">{fb.user_label}</span>
             </div>
             {fb.comment && <div className="text-muted italic">{fb.comment}</div>}
-            <div className="text-[10px] text-muted">{fb.created_at || fb.timestamp}</div>
+            <div className="text-[10px] text-muted">{fb.timestamp}</div>
           </div>
         ))}
       </div>

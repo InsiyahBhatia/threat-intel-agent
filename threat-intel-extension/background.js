@@ -3,19 +3,39 @@ const IOC_RE = {
   sha256: /\b[A-Fa-f0-9]{64}\b/g,
   md5: /\b[A-Fa-f0-9]{32}\b/g,
   sha1: /\b[A-Fa-f0-9]{40}\b/g,
-  domain: /\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|io|ru|cn|de|uk|xyz|top|info|biz|co|ai|app|gov|edu|mil|tv|cc|me|us|ca|fr|jp|br|au|in|nl|se|no|fi|dk|pl|cz|ch|at|be|es|pt|it|gr|tr|il|sa|ae|za|ng|ke|gh|tz|ug|rw|et|eg|ma|dz|sn|ci|cm|cd|ao|mz|zm|zw|bw|ls|sz|na|mg|mu|sc|km|cv|st|gw|gn|sl|lr|gm|ne|bf|ml|mr|td|sd|ss|so|dj|er|cf|cg|ga|gq|bi)\b/i,
-  combined: new RegExp(
-    '(' + /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b/g.source + ')|(' + /\b[A-Fa-f0-9]{64}\b/g.source + ')|(' + /\b[A-Fa-f0-9]{32}\b/g.source + ')|(' + /\b[A-Fa-f0-9]{40}\b/g.source + ')|(' + /\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|io|ru|cn|de|uk|xyz|top|info|biz|co|ai|app|gov|edu|mil|tv|cc|me|us|ca|fr|jp|br|au|in|nl|se|no|fi|dk|pl|cz|ch|at|be|es|pt|it|gr|tr|il|sa|ae|za)\b/i.source + ')', 'g'
-  )
+  domain: /\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|io|ru|cn|de|uk|xyz|top|info|biz|co|ai|app|gov|edu|mil|tv|cc|me|us|ca|fr|jp|br|au|in|nl|se|no|fi|dk|pl|cz|ch|at|be|es|pt|it|gr|tr|il|sa|ae|za|ng|ke|gh|tz|ug|rw|et|eg|ma|dz|sn|ci|cm|cd|ao|mz|zm|zw|bw|ls|sz|na|mg|mu|sc|km|cv|st|gw|gn|sl|lr|gm|ne|bf|ml|mr|td|sd|ss|so|dj|er|cf|cg|ga|gq|bi)\b/i
 };
 
 let apiBase = 'http://localhost:8000';
+let apiBaseNormalized = apiBase;
+let apiKey = '';
 const invCache = new Map();
+
+function normalizeApiBase(url) {
+  return url.replace(/\/+$/, '');
+}
+
+function apiFetch(path, options) {
+  options = options || {};
+  options.headers = options.headers || {};
+  if (apiKey) {
+    options.headers['Authorization'] = 'Bearer ' + apiKey;
+  }
+  return fetch(apiBaseNormalized + path, options);
+}
+
+chrome.storage.sync.get({ apiBase: apiBase, apiKey: '' }, function (items) {
+  apiBase = items.apiBase;
+  apiKey = items.apiKey || '';
+  apiBaseNormalized = normalizeApiBase(apiBase);
+  refreshBlocklist();
+});
 const blocklist = new Set();
 const rtBuffer = [];
 const rtStats = { totalDetections: 0, severityCounts: {}, typeCounts: {}, topIocs: [] };
 const seenIocs = new Set();
 let sidebarPorts = [];
+let pendingResults = [];
 let alertCount = 0;
 
 // AbortSignal.timeout polyfill for older Chrome (< 110)
@@ -27,25 +47,12 @@ if (!AbortSignal.timeout) {
   };
 }
 
-chrome.storage.sync.get({ apiBase: apiBase }, function (items) {
-  apiBase = items.apiBase;
-  refreshBlocklist();
-});
-
 chrome.runtime.onInstalled.addListener(function () {
   createContextMenus();
 });
 
 chrome.runtime.onStartup.addListener(function () {
   refreshBlocklist();
-});
-
-chrome.action.onClicked.addListener(function (tab) {
-  try {
-    chrome.sidePanel.open({ tabId: tab.id });
-  } catch (e) {
-    chrome.tabs.create({ url: chrome.runtime.getURL('sidebar.html') });
-  }
 });
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(function () {});
@@ -75,10 +82,13 @@ chrome.commands.onCommand.addListener(function (cmd) {
             return;
           }
           // open sidebar and start investigation
-          try { chrome.sidePanel.open({ tabId: tabs[0].id }); } catch (e) {}
-          investigate(text, tabs[0].id, function (result) {
+          var tabId = tabs[0].id;
+          try { chrome.sidePanel.open({ tabId: tabId }); } catch (e) {}
+          investigate(text, tabId, function (result) {
             if (result && result.verdict) {
-              broadcastToSidebar({ type: 'page-investigation', ioc: text, result: result }, tabs[0].id);
+              // queue result so it can be delivered when sidebar connects
+              pendingResults.push({ ioc: text, result: result, tabId: tabId });
+              broadcastToSidebar({ type: 'page-investigation', ioc: text, result: result }, tabId);
             }
           });
         });
@@ -145,6 +155,14 @@ chrome.runtime.onMessage.addListener(function (msg, sender, respond) {
       var key = msg.ioc ? msg.ioc.toLowerCase() : '';
       respond({ cached: invCache.has(key), result: invCache.get(key) || null });
       break;
+    case 'open-sidebar':
+      chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+        if (tabs[0]) {
+          try { chrome.sidePanel.open({ tabId: tabs[0].id }); } catch (e) {}
+        }
+      });
+      respond({ ok: true });
+      break;
     case 'mark-malicious':
       if (sender.tab) markTabMalicious(sender.tab.id, msg.severity || 'HIGH');
       respond({ ok: true });
@@ -154,14 +172,24 @@ chrome.runtime.onMessage.addListener(function (msg, sender, respond) {
       respond({ ok: true });
       break;
     case 'settings-updated':
-      if (msg.apiBase) { apiBase = msg.apiBase; refreshBlocklist(); }
+      if (msg.apiBase) { apiBase = msg.apiBase; apiBaseNormalized = normalizeApiBase(apiBase); }
+      if (msg.apiKey !== undefined) { apiKey = msg.apiKey || ''; }
+      refreshBlocklist();
       respond({ ok: true });
       break;
     case 'ping':
-      respond({ ok: true, apiBase: apiBase });
+      respond({ ok: true, apiBase: apiBaseNormalized });
       break;
     case 'ioc-detected':
       recordDetection(msg.ioc, msg.typeLabel || msg.iocType, msg.severity);
+      respond({ ok: true });
+      break;
+    case 'ioc-batch-detected':
+      if (msg.batch && Array.isArray(msg.batch)) {
+        msg.batch.forEach(function (item) {
+          recordDetection(item.ioc, item.typeLabel || item.iocType, null);
+        });
+      }
       respond({ ok: true });
       break;
     case 'get-live-feed':
@@ -185,6 +213,15 @@ chrome.runtime.onConnect.addListener(function (port) {
     port.onMessage.addListener(function (msg) {
       if (msg.type === 'tab-id') {
         port._tabId = msg.tabId;
+        // drain any pending investigation results for this tab
+        if (pendingResults.length > 0) {
+          var drained = pendingResults.splice(0);
+          drained.forEach(function (pr) {
+            if (!pr.tabId || pr.tabId === msg.tabId) {
+              try { port.postMessage({ type: 'page-investigation', ioc: pr.ioc, result: pr.result }); } catch (e) {}
+            }
+          });
+        }
       }
     });
     port.onDisconnect.addListener(function () {
@@ -198,6 +235,10 @@ function broadcastToSidebar(msg, tabId) {
     if (tabId && p._tabId && p._tabId !== tabId) return;
     try { p.postMessage(msg); } catch (e) {}
   });
+}
+
+function persistStats() {
+  chrome.storage.local.set({ detectionCount: rtStats.totalDetections });
 }
 
 function recordDetection(ioc, type, severity) {
@@ -224,10 +265,11 @@ function recordDetection(ioc, type, severity) {
   if (rtBuffer.length > 200) rtBuffer.splice(0, rtBuffer.length - 200);
 
   broadcastToSidebar({ type: 'new-detection', event: evt, stats: rtStats });
+  persistStats();
 }
 
 function pollAlerts() {
-  fetch(apiBase + '/api/alerts?limit=5', { signal: AbortSignal.timeout(5000) })
+  apiFetch('/api/alerts?limit=5', { signal: AbortSignal.timeout(5000) })
     .then(function (r) { return r.json(); })
     .then(function (data) {
       if (data.alerts && data.alerts.length > 0) {
@@ -273,7 +315,7 @@ function investigate(ioc, tabId, callback) {
   var controller = new AbortController();
   var timeout = setTimeout(function () { controller.abort(); }, 15000);
 
-  fetch(apiBase + '/api/chat', {
+  apiFetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message: key }),
@@ -318,7 +360,7 @@ function sendVerdictToTab(tabId, ioc, result) {
 
 function blockIoc(ioc, callback) {
   if (!ioc) { if (callback) callback({ error: 'No IOC provided' }); return; }
-  fetch(apiBase + '/api/blocklist', {
+  apiFetch('/api/blocklist', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ iocs: [ioc.trim()] }),
@@ -336,12 +378,13 @@ function blockIoc(ioc, callback) {
 }
 
 function refreshBlocklist() {
-  fetch(apiBase + '/api/blocklist', { signal: AbortSignal.timeout(10000) })
+  apiFetch('/api/blocklist', { signal: AbortSignal.timeout(10000) })
     .then(function (r) { return r.json(); })
     .then(function (data) {
       blocklist.clear();
-      if (data.iocs && Array.isArray(data.iocs)) {
-        data.iocs.forEach(function (item) {
+      var items = data.blocklist || data.iocs;
+      if (items && Array.isArray(items)) {
+        items.forEach(function (item) {
           if (typeof item === 'string') blocklist.add(item.toLowerCase());
           else if (item.ioc) blocklist.add(item.ioc.toLowerCase());
         });
@@ -381,9 +424,9 @@ function notify(title, message) {
 function parseResponse(text) {
   var result = { summary: text || '', verdict: null, campaign: null };
   if (!text) return result;
-  var vm = text.match(/\|\|\|VERDICT:(\{.*?\})\|\|\|/);
+  var vm = text.match(/\|\|\|VERDICT:(\{[\s\S]*?\})\|\|\|/);
   if (vm) { try { result.verdict = JSON.parse(vm[1]); } catch (e) {} }
-  var cm = text.match(/\|\|\|CAMPAIGN:(\{.*?\})\|\|\|/);
+  var cm = text.match(/\|\|\|CAMPAIGN:(\{[\s\S]*?\})\|\|\|/);
   if (cm) { try { result.campaign = JSON.parse(cm[1]); } catch (e) {} }
   return result;
 }
@@ -392,16 +435,6 @@ function isValidIoc(str) {
   if (!str || typeof str !== 'string') return false;
   var s = str.trim();
   if (!s || s.length < 4 || s.length > 255) return false;
-  // Use individual patterns for reliable full-match validation
-  IOC_RE.ipv4.lastIndex = 0;
-  if (IOC_RE.ipv4.exec(s) && s === RegExp.lastMatch) return true;
-  IOC_RE.sha256.lastIndex = 0;
-  if (IOC_RE.sha256.exec(s) && s === RegExp.lastMatch) return true;
-  IOC_RE.md5.lastIndex = 0;
-  if (IOC_RE.md5.exec(s) && s === RegExp.lastMatch) return true;
-  IOC_RE.sha1.lastIndex = 0;
-  if (IOC_RE.sha1.exec(s) && s === RegExp.lastMatch) return true;
-  IOC_RE.domain.lastIndex = 0;
-  if (IOC_RE.domain.exec(s) && s === RegExp.lastMatch) return true;
-  return false;
+  function test(re) { re.lastIndex = 0; var m = re.exec(s); return m && m[0] === s; }
+  return test(IOC_RE.ipv4) || test(IOC_RE.sha256) || test(IOC_RE.md5) || test(IOC_RE.sha1) || test(IOC_RE.domain);
 }

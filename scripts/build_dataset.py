@@ -9,23 +9,24 @@ Tracks timestamps:
     MalwareBazaar, dateadded from URLhaus) — preserved when available
 """
 
-import io
+import ipaddress
 import os
 import random
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-import ipaddress
+
+import httpx
 import numpy as np
 import pandas as pd
-import requests
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
+
 load_dotenv(ROOT / ".env")
 
 VT_KEY = os.getenv("VIRUSTOTAL_API_KEY")
@@ -37,7 +38,7 @@ PROC_DIR = DATA_DIR / "processed"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 PROC_DIR.mkdir(parents=True, exist_ok=True)
 
-NOW_UTC = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+NOW_UTC = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 FEEDS = {
     "feodo_ips": "https://feodotracker.abuse.ch/downloads/ipblocklist.csv",
@@ -57,9 +58,9 @@ def download_feeds():
             print(f"Skipping download, {name} already exists.")
             continue
         print(f"Downloading {name}...")
-        r = requests.get(url, timeout=30)
+        r = httpx.get(url, timeout=30)
         ext = "txt" if name == "ipsum" else "csv"
-        with open(RAW_DIR / f"{name}.{ext}", "wb") as f:
+        with (RAW_DIR / f"{name}.{ext}").open("wb") as f:
             f.write(r.content)
         print(f"[OK] {name}: {len(r.content)//1024}KB downloaded")
 
@@ -68,8 +69,9 @@ def fetch_clean_samples():
 
     try:
         # Tranco top-1K domains (verifiably legitimate)
-        r = requests.get("https://tranco-list.eu/top-1m.csv.zip", timeout=30)
-        import zipfile, io
+        r = httpx.get("https://tranco-list.eu/top-1m.csv.zip", timeout=30)
+        import io
+        import zipfile
         z = zipfile.ZipFile(io.BytesIO(r.content))
         lines = z.read(z.namelist()[0]).decode().splitlines()[:600]
         for line in lines:
@@ -89,7 +91,7 @@ def fetch_clean_samples():
 
     try:
         # Cloudflare IP ranges
-        cf = requests.get("https://www.cloudflare.com/ips-v4", timeout=15).text.splitlines()
+        cf = httpx.get("https://www.cloudflare.com/ips-v4", timeout=15).text.splitlines()
         sampled = 0
         for cidr in cf[:8]:
             net = ipaddress.ip_network(cidr)
@@ -134,7 +136,7 @@ def generate_clean():
         hosts = list(network.hosts())
         sampled = random.sample(hosts, min(250, len(hosts)))
         clean_ips.extend([str(ip) for ip in sampled])
-    
+
     df_clean = pd.DataFrame({
         "ioc": clean_ips,
         "ioc_type": "ip",
@@ -153,7 +155,7 @@ def generate_clean():
     df_clean.to_csv(PROC_DIR / "clean_samples.csv", index=False)
     print(f"[OK] Generated {len(df_clean)} clean samples")
 
-def parse_feeds():
+def parse_feeds():  # noqa: PLR0915
     samples = []
 
     # MalwareBazaar
@@ -230,9 +232,7 @@ def parse_feeds():
 def _refine_label_from_abuse(abuse_confidence: float, abuse_reports: int) -> str:
     if abuse_confidence >= 80:
         return "HIGH"
-    elif abuse_confidence >= 40:
-        return "MEDIUM"
-    elif abuse_confidence >= 10 or abuse_reports >= 5:
+    elif abuse_confidence >= 40 or abuse_confidence >= 10 or abuse_reports >= 5:
         return "LOW"
     return "CLEAN"
 
@@ -244,24 +244,24 @@ def enrich_low_samples():
 
     low_samples = []
     if (RAW_DIR / "ipsum.txt").exists():
-        with open(RAW_DIR / "ipsum.txt") as f:
+        with (RAW_DIR / "ipsum.txt").open() as f:
             ipsum = f.readlines()
-        
+
         low_candidates = [
-            line.split()[0] for line in ipsum 
+            line.split()[0] for line in ipsum
             if not line.startswith("#") and len(line.split()) > 1 and int(line.split()[1]) <= 3
         ][:400] # Take 400 candidates (respects 1000/day limit)
 
         print(f"Enriching {len(low_candidates)} LOW samples with AbuseIPDB...")
         for i, ip in enumerate(low_candidates):
             try:
-                ab = requests.get(
+                ab = httpx.get(
                     "https://api.abuseipdb.com/api/v2/check",
                     headers={"Key": ABUSE_KEY, "Accept": "application/json"},
                     params={"ipAddress": ip, "maxAgeInDays": 90},
                     timeout=5
                 ).json().get("data", {})
-                
+
                 low_samples.append({
                     "ioc": ip, "ioc_type": "ip",
                     "label": _refine_label_from_abuse(ab.get("abuseConfidenceScore", 0), ab.get("totalReports", 0)),
@@ -277,7 +277,7 @@ def enrich_low_samples():
                     "source_collected_at": None,
                 })
                 time.sleep(0.25)
-            except Exception as e:
+            except Exception:
                 continue
             if (i+1) % 50 == 0:
                 print(f"  Enriched {i+1}/{len(low_candidates)}")
@@ -285,7 +285,7 @@ def enrich_low_samples():
     pd.DataFrame(low_samples).to_csv(PROC_DIR / "low_samples.csv", index=False)
     print(f"[OK] Collected {len(low_samples)} LOW samples via API")
 
-def merge_all():
+def merge_all():  # noqa: PLR0912
     """Merge new samples with existing dataset, preserving first_seen."""
     new_parts = []
     for f in ["dataset_no_api.csv", "clean_samples.csv", "clean_iocs.csv", "low_samples.csv"]:

@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "format": "cef",
+  "target": "127.0.0.1",
+  "port": 514,
+  "protocol": "udp"
+}

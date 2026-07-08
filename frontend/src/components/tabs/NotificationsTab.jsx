@@ -8,7 +8,6 @@ export default function NotificationsTab({ palette }) {
   const [cfg, setCfg] = useState({
     email: { enabled: false, smtp_host: "", smtp_port: 587, smtp_user: "", smtp_pass: "", from_addr: "", to_addrs: [] },
     slack: { enabled: false, webhook_url: "" },
-    teams: { enabled: false, webhook_url: "" },
   });
   const [emailTo, setEmailTo] = useState("");
   const [testResult, setTestResult] = useState(null);
@@ -97,10 +96,10 @@ export default function NotificationsTab({ palette }) {
     >
       <div className="mb-4">
         <h3 className="text-sm font-semibold text-text">Notification Channels</h3>
-        <p className="text-xs text-muted mt-0.5">Configure Email, Slack, and Teams for automatic threat alerts</p>
+        <p className="text-xs text-muted mt-0.5">Configure Email and Slack for automatic threat alerts</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
         <Section title="Email (SMTP)" channel="email" fields={[
           { key: "smtp_host", label: "SMTP Host" },
           { key: "smtp_port", label: "SMTP Port", type: "number" },
@@ -109,9 +108,6 @@ export default function NotificationsTab({ palette }) {
           { key: "from_addr", label: "From Address" },
         ]} />
         <Section title="Slack" channel="slack" fields={[
-          { key: "webhook_url", label: "Webhook URL", secret: true },
-        ]} />
-        <Section title="Microsoft Teams" channel="teams" fields={[
           { key: "webhook_url", label: "Webhook URL", secret: true },
         ]} />
       </div>

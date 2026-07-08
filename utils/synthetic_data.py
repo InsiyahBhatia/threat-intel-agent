@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from utils.ml_features import FEATURE_COLS, _BASE_COLS, _DERIVED_COLS, _NEW_COLS
+from utils.ml_features import _BASE_COLS, _DERIVED_COLS, _NEW_COLS, FEATURE_COLS
 
 
 def _compute_derived(df: pd.DataFrame) -> pd.DataFrame:
@@ -19,7 +19,6 @@ def _compute_derived(df: pd.DataFrame) -> pd.DataFrame:
     abuse_tor = df["abuse_is_tor"].values
     abuse_reports = df["abuse_total_reports"].values
     abuse_users = df["abuse_distinct_users"].values
-    abuse_cats = df["abuse_categories_count"].values
     sh_ports = df["shodan_open_ports_count"].values
     sh_cves = df["shodan_cve_count"].values
     sh_22 = df["shodan_has_port_22"].values
@@ -243,6 +242,76 @@ def assign_features_realistic(label: str, n: int, rng: np.random.Generator | Non
         for i, (idx, _) in enumerate(df[no_type].iterrows()):
             df.loc[idx, choices[i]] = 1.0
 
+    # ── Derived features (match ml_features._compute_derived) ────────────────────────
+    def _sigmoid(x):
+        return np.where(x >= 0, 1.0 / (1.0 + np.exp(-x)), np.exp(x) / (1.0 + np.exp(x)))
+
+    def _compute_derived(df: pd.DataFrame) -> pd.DataFrame:
+        """Compute derived interaction/ratio features from base columns."""
+        # vt_abuse_agreement
+        df["vt_abuse_agreement"] = np.sqrt(
+            np.maximum(df["vt_malicious_ratio"], 0) * np.maximum(df["abuse_confidence"] / 100.0, 0)
+        )
+
+        # threat_signal_sum
+        df["threat_signal_sum"] = (
+            df["abuse_is_tor"]
+            + df["shodan_has_port_22"]
+            + df["shodan_has_port_445"]
+            + df["shodan_has_port_3389"]
+            + df["has_known_family"]
+            + df["otx_has_scan"]
+            + (df["vt_malicious_ratio"] > 0.4).astype(float)
+            + (df["abuse_confidence"] > 50).astype(float)
+        )
+
+        # port_attack_surface
+        df["port_attack_surface"] = (
+            df["shodan_has_port_22"] * 1.5
+            + df["shodan_has_port_445"] * 2.0
+            + df["shodan_has_port_3389"] * 2.5
+        ) / 6.0
+
+        # cve_per_port
+        df["cve_per_port"] = df["shodan_cve_count"] / np.maximum(df["shodan_open_ports_count"], 1.0)
+
+        # reports_per_user
+        mask = (df["abuse_total_reports"] > 0) & (df["abuse_distinct_users"] > 0)
+        df.loc[mask, "reports_per_user"] = np.minimum(
+            _sigmoid((df.loc[mask, "abuse_total_reports"] / df.loc[mask, "abuse_distinct_users"]) / 10.0), 1.0
+        )
+        df["reports_per_user"] = df["reports_per_user"].fillna(0.0)
+
+        # malicious_family - REMOVED (leakage proxy: vt_malicious_ratio * has_known_family)
+        # df["malicious_family"] = df["vt_malicious_ratio"] * df["has_known_family"]
+
+        # tor_reputation_risk
+        df["tor_reputation_risk"] = df["is_tor"] * _sigmoid(-df["vt_reputation"] / 30.0)
+
+        # otx_vt_corroboration
+        df["otx_vt_corroboration"] = np.minimum(df["otx_pulse_count"] / 10.0, 1.0) * df["vt_malicious_ratio"]
+
+        # shodan_exposure_score
+        df["shodan_exposure_score"] = (
+            _sigmoid(df["shodan_open_ports_count"] / 5.0) * 0.4
+            + _sigmoid(df["shodan_cve_count"] / 3.0) * 0.3
+            + df["port_attack_surface"] * 0.3
+        )
+
+        # has_malicious_vt_tags - proxy: high vt_malicious_ratio + has_known_family
+        df["has_malicious_vt_tags"] = ((df["vt_malicious_ratio"] > 0.1) & (df["has_known_family"] > 0.5)).astype(float)
+
+        # ── New indicator / harmless features (match ml_features._NEW_COLS) ─────────────────────
+        df["has_vt_data"] = 1.0
+        df["has_abuse_data"] = df["is_ip"]
+        df["has_shodan_data"] = df["is_ip"]
+        df["vt_harmless_ratio"] = np.clip(
+            0.88 - df["vt_malicious_ratio"].values + np.random.default_rng(42).normal(0, 0.06, len(df)), 0.0, 1.0
+        )
+
+        return df
+
+
     df = _compute_derived(df)
     return df[FEATURE_COLS]
 
@@ -256,8 +325,8 @@ def generate_dataset(n_per_class: int = 1500, seed: int = 42) -> tuple[pd.DataFr
         df = assign_features_realistic(label, n_per_class, rng)
         dfs.append(df)
         labels.extend([label] * n_per_class)
-    X = pd.concat(dfs, ignore_index=True)
-    return X, np.array(labels)
+    x_df = pd.concat(dfs, ignore_index=True)
+    return x_df, np.array(labels)
 
 
 def generate_imbalanced_dataset(total: int = 5000, seed: int = 42) -> tuple[pd.DataFrame, np.ndarray]:
@@ -271,5 +340,5 @@ def generate_imbalanced_dataset(total: int = 5000, seed: int = 42) -> tuple[pd.D
         df = assign_features_realistic(label, n, rng)
         dfs.append(df)
         labels.extend([label] * n)
-    X = pd.concat(dfs, ignore_index=True)
-    return X, np.array(labels)
+    x_df = pd.concat(dfs, ignore_index=True)
+    return x_df, np.array(labels)

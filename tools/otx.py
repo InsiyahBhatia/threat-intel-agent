@@ -4,8 +4,18 @@ Free tier: 1M requests/month.
 """
 
 import os
-import requests
-from langchain_core.tools import tool
+import threading
+
+import httpx
+
+from utils.decorators import tool
+
+_tls = threading.local()
+
+def _get_client() -> httpx.Client:
+    if not hasattr(_tls, "client"):
+        _tls.client = httpx.Client(timeout=10.0, follow_redirects=False)
+    return _tls.client
 
 OTX_API_KEY = os.getenv("OTX_API_KEY")
 OTX_BASE = "https://otx.alienvault.com/api/v1"
@@ -24,7 +34,8 @@ def _query_otx(ioc: str) -> dict:
     else:
         url = f"{OTX_BASE}/indicators/domain/{ioc}/general"
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        client = _get_client()
+        resp = client.get(url, headers=headers)
         resp.raise_for_status()
         data = resp.json()
         pulses = data.get("pulse_info", {}).get("pulses", [])[:10]
@@ -38,7 +49,7 @@ def _query_otx(ioc: str) -> dict:
             "country": data.get("country_code", ""),
             "asn": data.get("asn", ""),
         }
-    except requests.RequestException:
+    except httpx.HTTPError:
         return {"pulses": [], "avg_confidence": 0, "has_scan": False}
 
 

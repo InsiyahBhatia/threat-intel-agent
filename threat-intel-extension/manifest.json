@@ -9,11 +9,11 @@
     "storage",
     "notifications",
     "alarms",
-    "sidePanel"
+    "sidePanel",
+    "clipboardRead"
   ],
   "host_permissions": [
-    "http://*/*",
-    "https://*/*"
+    "http://localhost:8000"
   ],
   "commands": {
     "_execute_action": {
@@ -72,6 +72,6 @@
     }
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src http://localhost:8000"
   }
 }

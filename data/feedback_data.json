@@ -1,0 +1,10 @@
+[
+  {
+    "ioc": "283b06e0931d58b320fb5222bd9e2327",
+    "features": {},
+    "predicted": "CRITICAL",
+    "user_label": "CRITICAL",
+    "source": "ui",
+    "timestamp": "2026-07-05T14:14:41.517522+00:00"
+  }
+]

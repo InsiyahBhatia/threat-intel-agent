@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List
-
 
 # Node colours & shapes per severity
 
@@ -13,9 +11,6 @@ _SEV_STYLE: dict[str, dict] = {
     "HIGH":     {"color": {"background": "#ff8800", "border": "#e57200"},
                  "font":  {"color": "#ffffff"},
                  "shape": "dot", "size": 18},
-    "MEDIUM":   {"color": {"background": "#facc15", "border": "#d4a000"},
-                 "font":  {"color": "#0a0a0b"},
-                 "shape": "dot", "size": 14},
     "LOW":      {"color": {"background": "#3b82f6", "border": "#2563eb"},
                  "font":  {"color": "#ffffff"},
                  "shape": "dot", "size": 12},
@@ -47,7 +42,7 @@ class IOCNode:
 
 class ThreatGraph:
     def __init__(self) -> None:
-        self.nodes: Dict[str, IOCNode] = {}
+        self.nodes: dict[str, IOCNode] = {}
         self.edges: list[dict] = []
 
     def add_node(self, node: IOCNode) -> None:

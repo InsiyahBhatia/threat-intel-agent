@@ -28,6 +28,7 @@ input[type="checkbox"]{width:18px;height:18px;accent-color:#EF4444;cursor:pointe
 <body>
 <h1>Settings</h1>
 <div class="grp"><label>API Base URL</label><input type="text" id="apiUrl" placeholder="http://localhost:8000"><div class="hint">Your Threat Intel Agent backend server</div></div>
+<div class="grp"><label>API Key (optional)</label><input type="text" id="apiKey" placeholder="Bearer token for authenticated backends"><div class="hint">Leave blank if TIA_DISABLE_AUTH=true on server</div></div>
 <div class="row"><input type="checkbox" id="autoScan"><label>Auto-scan pages for IOCs on load</label></div>
 <div class="btn-row"><button class="btn" id="saveBtn">Save</button><button class="btn sec" id="testBtn">Test Connection</button></div>
 <div id="stat" class="stat"></div>

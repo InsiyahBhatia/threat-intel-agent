@@ -6,7 +6,7 @@ import {
   ChevronDown, ChevronLeft, Cpu, MessageSquare, Send, Radio,
 } from "lucide-react";
 import { cn } from "../lib/utils";
-import brandIcon from "../assest/brand-icon.png";
+import brandIcon from "../assets/brand-icon.png";
 
 const navGroups = [
   {
@@ -33,7 +33,6 @@ const navGroups = [
     label: "Manage",
     items: [
       { id: "bulk", label: "Bulk Import", icon: Upload },
-      { id: "integrations", label: "Integrations", icon: Cpu },
       { id: "notifications", label: "Notifications", icon: Send },
       { id: "workspace", label: "Workspaces", icon: FolderKanban },
       { id: "dbsearch", label: "DB Search", icon: Database },
@@ -90,13 +89,14 @@ export default function Layout({
   onWorkspaceChange, dark, onToggleTheme,
   backendOnline, sidebarCollapsed, onToggleSidebar,
 }) {
-  const getCount = (id) => {
-    if (id === "blocklist") return counts.blocklist;
-    if (id === "history") return counts.history;
-    if (id === "webhooks") return counts.webhooks;
-    if (id === "feeds") return counts.feeds;
-    if (id === "alerts") return counts.alerts;
-    return null;
+const getCount = (id) => {
+    if (!counts) return 0;
+    if (id === "blocklist") return counts.blocklist ?? 0;
+    if (id === "history") return counts.history ?? 0;
+    if (id === "webhooks") return counts.webhooks ?? 0;
+    if (id === "feeds") return counts.feeds ?? 0;
+    if (id === "alerts") return counts.alerts ?? 0;
+    return 0;
   };
 
   const sidebarWidth = sidebarCollapsed ? "w-[60px]" : "w-[220px]";

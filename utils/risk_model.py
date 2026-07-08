@@ -15,7 +15,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-
 MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "risk_model.json"
 
 FEATURES = [
@@ -213,7 +212,7 @@ def predict_risk(text: str, model: dict | None = None, ml_features: dict | None 
 
 
 def _compute_confidence(risk_score: float, ml_features: dict | None = None) -> int:
-    base = int(round(55 + abs(risk_score - 0.5) * 90))
+    base = round(55 + abs(risk_score - 0.5) * 90)
     if ml_features is None:
         return base
     data_coverage = sum([

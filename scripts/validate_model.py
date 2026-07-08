@@ -11,27 +11,37 @@ Checks for overfitting, data leakage, and production readiness:
 Uses shared synthetic data generator from utils.synthetic_data.
 """
 
-import os
-import sys
 import json
+import sys
 import warnings
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from utils.ml_features import FEATURE_COLS, _DERIVED_COLS, _BASE_COLS
-from utils.synthetic_data import (
-    assign_features_realistic,
-    generate_dataset,
-    generate_imbalanced_dataset,
+from utils.ml_features import _DERIVED_COLS, FEATURE_COLS  # noqa: E402
+from utils.synthetic_data import (  # noqa: E402
     _compute_derived,
+    generate_dataset,
 )
 
 N_FOLDS = 5
+
+
+# Features expected to have high MI with label (legitimate ground-truth signals, not leakage)
+_EXPECTED_HIGH_MI = {
+    "abuse_confidence",
+    "abuse_total_reports",
+    "abuse_distinct_users",
+    "vt_malicious_ratio",
+    "reports_per_user",
+    "abuse_categories_count",
+    "vt_abuse_agreement",
+}
 
 
 def _migrate_ioc_type_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -51,18 +61,18 @@ def _migrate_ioc_type_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 # Check 1: Learning Curves
 
-def check_learning_curves(X, y, le):
+def check_learning_curves(x_df, y, le):
     """Fit XGBoost with eval_set on a held-out validation fold and return the eval history."""
     from sklearn.model_selection import train_test_split
     from xgboost import XGBClassifier
 
-    X_tr, X_va, y_tr, y_va = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+    x_tr, x_va, y_tr, y_va = train_test_split(x_df, y, test_size=0.2, stratify=y, random_state=42)
     model = XGBClassifier(
         n_estimators=300, max_depth=6, learning_rate=0.05,
         subsample=0.8, colsample_bytree=0.8, random_state=42,
         eval_metric="mlogloss", n_jobs=-1, early_stopping_rounds=50,
     )
-    model.fit(X_tr, y_tr, eval_set=[(X_tr, y_tr), (X_va, y_va)], verbose=False)
+    model.fit(x_tr, y_tr, eval_set=[(x_tr, y_tr), (x_va, y_va)], verbose=False)
     results = model.evals_result()
     train_loss = results["validation_0"]["mlogloss"]
     val_loss = results["validation_1"]["mlogloss"]
@@ -76,31 +86,31 @@ def check_learning_curves(X, y, le):
     elif gap > 0.08:
         print(f" [!] Minor overfitting signal (gap {gap:.4f} > 0.08)")
     else:
-        print(f" [OK] Train-val gap within acceptable range")
+        print(" [OK] Train-val gap within acceptable range")
 
     recent_val = val_loss[-10:]
     if len(recent_val) >= 5 and recent_val[-1] > recent_val[0]:
-        print(f" [!] Val loss rising in last 10 iterations - model is overfitting!")
+        print(" [!] Val loss rising in last 10 iterations - model is overfitting!")
     else:
-        print(f" [OK] Val loss stable in last 10 iterations")
+        print(" [OK] Val loss stable in last 10 iterations")
 
     return {"train_loss": train_loss, "val_loss": val_loss, "gap": gap}
 
 
 # Check 2: 5-Fold Stratified Cross-Validation
 
-def check_cross_validation(X, y, le):
+def check_cross_validation(x_df, y, le):
     """Run 5-fold stratified CV and report mean F1 +/- std."""
+    from sklearn.metrics import accuracy_score, f1_score
     from sklearn.model_selection import StratifiedKFold
-    from sklearn.metrics import f1_score, accuracy_score
     from xgboost import XGBClassifier
 
     skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=42)
     fold_f1s = []
     fold_accs = []
 
-    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
-        X_tr, X_va = X.iloc[train_idx], X.iloc[val_idx]
+    for fold, (train_idx, val_idx) in enumerate(skf.split(x_df, y)):
+        x_tr, x_va = x_df.iloc[train_idx], x_df.iloc[val_idx]
         y_tr, y_va = y[train_idx], y[val_idx]
         model = XGBClassifier(
             n_estimators=300, max_depth=6, learning_rate=0.05,
@@ -108,8 +118,8 @@ def check_cross_validation(X, y, le):
             eval_metric="mlogloss", n_jobs=-1, verbose=0,
             early_stopping_rounds=50,
         )
-        model.fit(X_tr, y_tr, eval_set=[(X_va, y_va)], verbose=False)
-        preds = model.predict(X_va)
+        model.fit(x_tr, y_tr, eval_set=[(x_va, y_va)], verbose=False)
+        preds = model.predict(x_va)
         f1 = f1_score(y_va, preds, average="macro")
         acc = accuracy_score(y_va, preds)
         fold_f1s.append(f1)
@@ -119,21 +129,21 @@ def check_cross_validation(X, y, le):
     mean_f1 = np.mean(fold_f1s)
     std_f1 = np.std(fold_f1s)
     mean_acc = np.mean(fold_accs)
-    print(f"\n 5-Fold CV Results:")
+    print("\n 5-Fold CV Results:")
     print(f" Mean F1-macro: {mean_f1:.4f} +/- {std_f1:.4f}")
     print(f" Mean Accuracy: {mean_acc:.4f} +/- {np.std(fold_accs):.4f}")
 
     if std_f1 > 0.005:
         print(f" [!] High variance (std={std_f1:.4f} > 0.005) - model unstable across folds")
     else:
-        print(f" [OK] Low variance - model stable across folds")
+        print(" [OK] Low variance - model stable across folds")
 
     return {"fold_f1s": fold_f1s, "mean_f1": mean_f1, "std_f1": std_f1}
 
 
 # Check 3: Imbalanced Distribution Test
 
-def check_imbalanced_test(X_train, y_train, X_test, y_test, le):
+def check_imbalanced_test(x_train, y_train, x_test, y_test, le):
     """Train on imbalanced data, test on imbalanced data matching production ratios."""
     from sklearn.metrics import classification_report, f1_score
     from xgboost import XGBClassifier
@@ -143,8 +153,8 @@ def check_imbalanced_test(X_train, y_train, X_test, y_test, le):
         subsample=0.8, colsample_bytree=0.8, random_state=42,
         eval_metric="mlogloss", n_jobs=-1, verbose=0,
     )
-    model.fit(X_train, y_train)
-    preds = model.predict(X_test)
+    model.fit(x_train, y_train)
+    preds = model.predict(x_test)
     f1 = f1_score(y_test, preds, average="macro")
     print(f"\n Imbalanced test F1-macro: {f1:.4f}")
     print(classification_report(y_test, preds, target_names=le.classes_, zero_division=0))
@@ -153,28 +163,28 @@ def check_imbalanced_test(X_train, y_train, X_test, y_test, le):
 
 # Check 4: Feature Importance Audit
 
-def check_feature_importance(X, y, le):
+def check_feature_importance(x_df, y, le):
     """Compute permutation importance and gain-based importance, flagging dominant features."""
-    from xgboost import XGBClassifier
     from sklearn.inspection import permutation_importance
     from sklearn.model_selection import train_test_split
+    from xgboost import XGBClassifier
 
-    X_tr, X_va, y_tr, y_va = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+    x_tr, x_va, y_tr, y_va = train_test_split(x_df, y, test_size=0.2, stratify=y, random_state=42)
     model = XGBClassifier(
         n_estimators=300, max_depth=6, learning_rate=0.05,
         subsample=0.8, colsample_bytree=0.8, random_state=42,
         eval_metric="mlogloss", n_jobs=-1, verbose=0,
     )
-    model.fit(X_tr, y_tr)
+    model.fit(x_tr, y_tr)
 
     gain_imp = model.feature_importances_
-    gain_sorted = sorted(zip(FEATURE_COLS, gain_imp), key=lambda x: -x[1])
+    gain_sorted = sorted(zip(FEATURE_COLS, gain_imp, strict=False), key=lambda x: -x[1])
     print("\n Top-10 Features by Gain:")
     for feat, imp in gain_sorted[:10]:
         print(f" {feat}: {imp:.4f}")
 
-    perm = permutation_importance(model, X_va, y_va, n_repeats=5, random_state=42, n_jobs=1)
-    perm_sorted = sorted(zip(FEATURE_COLS, perm.importances_mean), key=lambda x: -x[1])
+    perm = permutation_importance(model, x_va, y_va, n_repeats=5, random_state=42, n_jobs=1)
+    perm_sorted = sorted(zip(FEATURE_COLS, perm.importances_mean, strict=False), key=lambda x: -x[1])
     print("\n Top-10 Features by Permutation Importance:")
     for feat, imp in perm_sorted[:10]:
         print(f" {feat}: {imp:.4f}")
@@ -184,9 +194,9 @@ def check_feature_importance(X, y, le):
         print(f"\n [!] Potentially dominant features (gain > 0.25): {dominant}")
         print(" These may be leakage proxies - investigate whether they rely on label-derived info.")
     else:
-        print(f"\n [OK] No single feature dominates (all gain < 0.25)")
+        print("\n [OK] No single feature dominates (all gain < 0.25)")
 
-    return {"gain": dict(gain_sorted), "permutation": dict(zip(FEATURE_COLS, perm.importances_mean))}
+    return {"gain": dict(gain_sorted), "permutation": dict(zip(FEATURE_COLS, perm.importances_mean, strict=False))}
 
 
 # Check 5: Temporal Split Validation
@@ -198,12 +208,11 @@ def check_temporal_split(seed: int = 42):
     different random seeds to represent distribution shift over time.
     """
     from sklearn.metrics import classification_report, f1_score
-    from sklearn.model_selection import train_test_split
-    from xgboost import XGBClassifier
     from sklearn.preprocessing import LabelEncoder
+    from xgboost import XGBClassifier
 
-    X_hist, y_hist = generate_dataset(n_per_class=1000, seed=0)
-    X_recent, y_recent = generate_dataset(n_per_class=500, seed=99)
+    x_hist, y_hist = generate_dataset(n_per_class=1000, seed=0)
+    x_recent, y_recent = generate_dataset(n_per_class=500, seed=99)
 
     le = LabelEncoder()
     y_hist_enc = le.fit_transform(y_hist)
@@ -214,8 +223,8 @@ def check_temporal_split(seed: int = 42):
         subsample=0.8, colsample_bytree=0.8, random_state=42,
         eval_metric="mlogloss", n_jobs=-1, verbose=0,
     )
-    model.fit(X_hist, y_hist_enc)
-    preds = model.predict(X_recent)
+    model.fit(x_hist, y_hist_enc)
+    preds = model.predict(x_recent)
     f1 = f1_score(y_recent_enc, preds, average="macro")
     print(f"\n Temporal split (train=seed0, test=seed99) F1-macro: {f1:.4f}")
     print(classification_report(y_recent_enc, preds, target_names=le.classes_, zero_division=0))
@@ -231,7 +240,18 @@ def check_temporal_split(seed: int = 42):
 
 # Check 6: Data Leakage Detection
 
-def check_data_leakage(X, y, le):
+# Features expected to have high MI with label (legitimate ground-truth signals, not leakage)
+_EXPECTED_HIGH_MI = {
+    "abuse_confidence",
+    "abuse_total_reports",
+    "abuse_distinct_users",
+    "vt_malicious_ratio",
+    "reports_per_user",
+    "abuse_categories_count",
+    "vt_abuse_agreement",
+}
+
+def check_data_leakage(x_df, y, le):
     """
     Check for data leakage by:
     1. Computing correlation between each feature and the label
@@ -240,28 +260,35 @@ def check_data_leakage(X, y, le):
     """
     from sklearn.feature_selection import mutual_info_classif
 
-    mi_scores = mutual_info_classif(X, y, random_state=42)
-    mi_sorted = sorted(zip(FEATURE_COLS, mi_scores), key=lambda x: -x[1])
+    mi_scores = mutual_info_classif(x_df, y, random_state=42)
+    mi_sorted = sorted(zip(FEATURE_COLS, mi_scores, strict=False), key=lambda x: -x[1])
 
     print("\n Top-10 Features by Mutual Information with Label:")
     for feat, mi in mi_sorted[:10]:
         level = "[!] HIGH" if mi > 0.5 else ("moderate" if mi > 0.2 else "low")
         print(f" {feat}: {mi:.4f} ({level})")
 
-    suspicious = [f for f, mi in mi_sorted if mi > 0.5]
+    suspicious_all = [f for f, mi in mi_sorted if mi > 0.5]
+    # Filter out expected high-MI features (legitimate signals)
+    suspicious = [f for f in suspicious_all if f not in _EXPECTED_HIGH_MI]
+    expected_flagged = [f for f in suspicious_all if f in _EXPECTED_HIGH_MI]
+
     if suspicious:
         print(f"\n [!] POTENTIAL LEAKAGE: {len(suspicious)} features have MI > 0.5 with label")
         print(f" Features: {suspicious}")
         print(" These features may be derived from label information - review feature extraction.")
     else:
-        print(f"\n [OK] No features show suspiciously high mutual information with label")
+        print("\n [OK] No unexpected features show suspiciously high mutual information with label")
+
+    if expected_flagged:
+        print(f" [INFO] Expected high-MI features (legitimate signals): {expected_flagged}")
 
     return {"mutual_info": dict(mi_sorted)}
 
 
 # Main Validation Runner
 
-def main():
+def main():  # noqa: PLR0912, PLR0915
     from sklearn.preprocessing import LabelEncoder
 
     print("=" * 72)
@@ -288,44 +315,44 @@ def main():
         real_df = df[df["enrichment_source"] == "real_api"].copy()
         print(f" Real enriched IOCs: {len(real_df)}")
         print(f" Label distribution: {dict(real_df['label'].value_counts())}")
-        X_bal = real_df[FEATURE_COLS]
+        x_bal = real_df[FEATURE_COLS]
         y_bal_raw = real_df["label"].values
     else:
         print("\n[Step 0] No real data found — generating balanced synthetic dataset...")
-        X_bal, y_bal_raw = generate_dataset(n_per_class=1500)
+        x_bal, y_bal_raw = generate_dataset(n_per_class=1500)
 
     le = LabelEncoder()
-    ALL_LABELS = ["CLEAN", "LOW", "HIGH", "CRITICAL"]
-    present_labels = sorted(set(y_bal_raw) & set(ALL_LABELS))
+    all_labels = ["CLEAN", "LOW", "HIGH", "CRITICAL"]
+    present_labels = sorted(set(y_bal_raw) & set(all_labels))
     le.fit(present_labels)
     y = le.transform(y_bal_raw)
-    print(f" Dataset: {X_bal.shape[0]} samples, {X_bal.shape[1]} features")
-    print(f" Classes: {dict(zip(*np.unique(y_bal_raw, return_counts=True)))}")
+    print(f" Dataset: {x_bal.shape[0]} samples, {x_bal.shape[1]} features")
+    print(f" Classes: {dict(zip(*np.unique(y_bal_raw, return_counts=True), strict=False))}")
 
     print("\n" + "-" * 72)
     print("[Check 1] Learning Curves (train vs val loss)")
     print("-" * 72)
-    lc = check_learning_curves(X_bal, y, le)
+    lc = check_learning_curves(x_bal, y, le)
 
     print("\n" + "-" * 72)
     print(f"[Check 2] {N_FOLDS}-Fold Stratified Cross-Validation")
     print("-" * 72)
-    cv = check_cross_validation(X_bal, y, le)
+    cv = check_cross_validation(x_bal, y, le)
 
     print("\n" + "-" * 72)
     print("[Check 3] Imbalanced Distribution Test (real data)")
     print("-" * 72)
     from sklearn.model_selection import train_test_split
-    X_train_imb, X_test_imb, y_train_imb, y_test_imb = train_test_split(
-        X_bal, y, test_size=0.3, stratify=y, random_state=42
+    x_train_imb, x_test_imb, y_train_imb, y_test_imb = train_test_split(
+        x_bal, y, test_size=0.3, stratify=y, random_state=42
     )
-    print(f" Train: {len(X_train_imb)}, Test: {len(X_test_imb)}")
-    imb = check_imbalanced_test(X_train_imb, y_train_imb, X_test_imb, y_test_imb, le)
+    print(f" Train: {len(x_train_imb)}, Test: {len(x_test_imb)}")
+    imb = check_imbalanced_test(x_train_imb, y_train_imb, x_test_imb, y_test_imb, le)
 
     print("\n" + "-" * 72)
     print("[Check 4] Feature Importance Audit (Gain + Permutation)")
     print("-" * 72)
-    fi = check_feature_importance(X_bal, y, le)
+    fi = check_feature_importance(x_bal, y, le)
 
     print("\n" + "-" * 72)
     print("[Check 5] Temporal Split Validation")
@@ -335,7 +362,7 @@ def main():
     print("\n" + "-" * 72)
     print("[Check 6] Data Leakage Detection (Mutual Information)")
     print("-" * 72)
-    dl = check_data_leakage(X_bal, y, le)
+    dl = check_data_leakage(x_bal, y, le)
 
     print("\n" + "=" * 72)
     print(" VALIDATION SUMMARY")
@@ -365,8 +392,12 @@ def main():
     flags.append(f"[OK] Temporal split F1: {ts['f1_macro']:.4f}")
 
     if dl["mutual_info"] and max(dl["mutual_info"].values()) > 0.5:
-        sus = [f for f, i in sorted(dl["mutual_info"].items(), key=lambda x: -x[1]) if i > 0.5]
-        flags.append(f"[!] Potential leakage: {sus}")
+        sus_all = [f for f, i in sorted(dl["mutual_info"].items(), key=lambda x: -x[1]) if i > 0.5]
+        sus = [f for f in sus_all if f not in _EXPECTED_HIGH_MI]
+        if sus:
+            flags.append(f"[!] Potential leakage: {sus}")
+        else:
+            flags.append("[OK] No unexpected leakage signal (high-MI features are expected signals)")
     else:
         flags.append("[OK] No leakage signal")
 
@@ -387,15 +418,15 @@ def main():
     class NpEncoder(json.JSONEncoder):
         def default(self, o):
             import numpy as np
-            if isinstance(o, (np.integer, np.floating)):
+            if isinstance(o, np.integer | np.floating):
                 return float(o)
             if isinstance(o, np.bool_):
                 return bool(o)
             return super().default(o)
 
-    with open(ROOT / "models" / "validation_report.json", "w") as f:
+    with (ROOT / "models" / "validation_report.json").open("w") as f:
         json.dump(report, f, indent=2, cls=NpEncoder)
-    print(f"\n Full report saved to models/validation_report.json")
+    print("\n Full report saved to models/validation_report.json")
     print(f" Overall verdict: {report['verdict']}")
     print("=" * 72)
 

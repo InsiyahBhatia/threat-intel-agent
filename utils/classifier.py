@@ -4,7 +4,6 @@ IOC Classifier — determines the type of an Indicator of Compromise.
 
 import re
 
-
 # Regex patterns
 IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}(:\d+)?$")
 MD5_RE = re.compile(r"^[a-fA-F0-9]{32}$")
@@ -51,6 +50,29 @@ def classify_ioc(ioc: str) -> str:
         return "domain"
 
     return "unknown"
+
+
+def extract_ioc_from_text(text: str) -> str | None:
+    """
+    Scan free text for the first IOC pattern found.
+    Strips URL scheme to extract domain when needed.
+    Returns the raw IOC string or None.
+    """
+    text = text.strip()
+    if not text:
+        return None
+
+    stripped_url = text
+    if URL_RE.match(text):
+        from urllib.parse import urlparse
+        parsed = urlparse(text)
+        stripped_url = parsed.netloc or text
+
+    for pattern in (IPV4_RE, MD5_RE, SHA1_RE, SHA256_RE, DOMAIN_RE):
+        m = pattern.search(stripped_url)
+        if m:
+            return m.group(0)
+    return None
 
 
 def validate_ioc(ioc: str) -> tuple[bool, str]:

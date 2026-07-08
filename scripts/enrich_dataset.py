@@ -23,22 +23,22 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import numpy as np
 import pandas as pd
-import requests
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 load_dotenv(ROOT / ".env", override=True)
 
-from utils.ml_features import FEATURE_COLS, extract_ml_features
+from utils.ml_features import FEATURE_COLS, extract_ml_features  # noqa: E402
 
 DATA_DIR = ROOT / "data"
 CKPT_PATH = DATA_DIR / "enrich_checkpoint.csv"
@@ -47,7 +47,7 @@ VT_DELAY = 15.5
 ABUSE_DELAY = 0.5
 SHODAN_DELAY = 1.1
 CHECKPOINT_EVERY = 25
-NOW_UTC = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+NOW_UTC = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def discover_keys(prefix: str) -> list[str]:
@@ -60,9 +60,9 @@ def discover_keys(prefix: str) -> list[str]:
     keys = []
     env_path = ROOT / ".env"
     if env_path.exists():
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
+        with (env_path).open() as f:
+            for raw_line in f:
+                line = raw_line.strip()
                 if not line or line.startswith("#"):
                     continue
                 if "=" not in line:
@@ -131,7 +131,7 @@ def query_vt(ioc: str, ioc_type: str) -> dict:
         else:
             return {}
 
-        r = requests.get(url, headers=headers, timeout=10)
+        r = httpx.get(url, headers=headers, timeout=10)
         if r.status_code == 404:
             return {
                 "malicious_votes": 0, "total_engines": 1,
@@ -164,7 +164,7 @@ def query_abuse(ip: str) -> dict:
     if not key:
         return {}
     try:
-        r = requests.get(
+        r = httpx.get(
             "https://api.abuseipdb.com/api/v2/check",
             headers={"Key": key, "Accept": "application/json"},
             params={"ipAddress": ip, "maxAgeInDays": 90, "verbose": True},
@@ -193,7 +193,7 @@ def query_shodan(ip: str) -> dict:
     if not key:
         return {}
     try:
-        r = requests.get(
+        r = httpx.get(
             f"https://api.shodan.io/shodan/host/{ip}",
             params={"key": key},
             timeout=10,
@@ -271,7 +271,7 @@ def enrich_row(ioc: str, ioc_type: str) -> dict:
     )
 
 
-def run_enrichment(label_filter: str | None, limit: int | None, dry_run: bool):
+def run_enrichment(label_filter: str | None, limit: int | None, dry_run: bool):  # noqa: PLR0912, PLR0915
     dataset_path = DATA_DIR / "ioc_dataset.csv"
     if not dataset_path.exists():
         print("ERROR: data/ioc_dataset.csv not found. Run build_dataset.py first.")
@@ -325,7 +325,7 @@ def run_enrichment(label_filter: str | None, limit: int | None, dry_run: bool):
     vt_effective_delay = VT_DELAY / max(vt_rotator.count, 1)
     est_seconds = ip_count * (vt_effective_delay + ABUSE_DELAY + SHODAN_DELAY) + other_count * vt_effective_delay
     print(f"\nEstimated time: {est_seconds/60:.1f} minutes ({ip_count} IPs, {other_count} other)")
-    print(f"VT effective delay: {vt_effective_delay:.1f}s (key rotation ×{vt_rotator.count})")
+    print(f"VT effective delay: {vt_effective_delay:.1f}s (key rotation x{vt_rotator.count})")
     print("Press Ctrl+C to interrupt — progress is checkpointed.\n")
 
     enriched_count = 0
@@ -384,7 +384,7 @@ def _save_checkpoint(buf: list[dict], df: pd.DataFrame, dataset_path: Path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Bulk IOC enrichment with API rate limiting and multi-key rotation")
-    parser.add_argument("--label", help="Only enrich IOCs with this label (CRITICAL/HIGH/MEDIUM/LOW/CLEAN)")
+    parser.add_argument("--label", help="Only enrich IOCs with this label (CRITICAL/HIGH/LOW/CLEAN)")
     parser.add_argument("--limit", type=int, help="Max IOCs to enrich (for budget/quota control)")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be enriched without calling APIs")
     args = parser.parse_args()

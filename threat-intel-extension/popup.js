@@ -1,5 +1,5 @@
 (function () {
-  var apiBase = 'http://127.0.0.1:8000';
+  var apiBase = 'http://localhost:8000';
   var statusEl = document.getElementById('status');
   var pageIocCountEl = document.getElementById('pageIocCount');
   var totalDetectionsEl = document.getElementById('totalDetections');
@@ -61,7 +61,7 @@
 
   function investigateIoc(text) {
     chrome.runtime.sendMessage({
-      type: 'investigate',
+      type: 'open-sidebar-investigate',
       ioc: text.trim()
     });
     window.close();
